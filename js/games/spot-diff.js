@@ -50,7 +50,7 @@ export function create(container, onExit) {
         </div>
         <div class="sd-menu">
           <p class="sd-intro">选一张图片开始找不同：可以用自己的照片，也可以用免费 AI 生成专属图片。<br>
-            玩法：找出两幅图里的 <b>5 处不同</b>——直接<b>点击</b>，或者按住<b>拖动画圈</b>把不同处圈出来！</p>
+            上传图片时选择类型：<b>普通单图</b>（自动生成几处不同）或<b>现成的找不同图</b>（左右/上下并排，保持原样找）。直接<b>点击</b>或<b>画圈</b>标记即可。</p>
           <div class="sd-actions">
             <button class="btn btn-primary" id="sd-upload">📷 上传图片</button>
             <button class="btn btn-primary" id="sd-gallery">🖼️ 我的图库</button>
@@ -69,7 +69,7 @@ export function create(container, onExit) {
       try {
         const first = await readFileAsDataUrl(files[0]);
         const img = await loadImage(first, { crossOrigin: false });
-        startGame(img);
+        askModeAndStart(img);
         for (const f of files.slice(1)) {
           try {
             const d = await readFileAsDataUrl(f);
@@ -139,7 +139,7 @@ export function create(container, onExit) {
         if (!it) return;
         try {
           const img = await loadImage(it.dataUrl, { crossOrigin: false });
-          startGame(img);
+          askModeAndStart(img);
         } catch { toast('图片加载失败'); }
       }));
       grid.querySelectorAll('.gal-del').forEach(b => b.addEventListener('click', async () => {
@@ -210,6 +210,45 @@ export function create(container, onExit) {
         genBtn.disabled = false;
       }
     });
+  }
+
+  // ---------- 上传图片类型选择 ----------
+  function askModeAndStart(img) {
+    const root = setScreen(`
+      <div class="modal">
+        <div class="modal-card">
+          <h2>🖼️ 这张图是哪种？</h2>
+          <p class="muted">告诉游戏怎么玩，找不同会更准：</p>
+          <div class="sd-mode-options">
+            <button class="sd-mode" id="mode-single">
+              <div class="mode-icon">🌄</div>
+              <div class="mode-body">
+                <div class="mode-title">普通单张画面</div>
+                <div class="mode-desc">游戏会在图上自动生成几处不同（适合普通照片 / 插画）</div>
+              </div>
+            </button>
+            <button class="sd-mode" id="mode-pair">
+              <div class="mode-icon">🖼️</div>
+              <div class="mode-body">
+                <div class="mode-title">已经做好的找不同图</div>
+                <div class="mode-desc">图里已有一对画面（左右或上下并排），保持原样来找不同</div>
+              </div>
+            </button>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" id="mode-cancel">取消</button>
+          </div>
+        </div>
+      </div>`);
+    q(root, '#mode-cancel').addEventListener('click', renderMenu);
+    q(root, '#mode-single').addEventListener('click', () => startGame(img));
+    q(root, '#mode-pair').addEventListener('click', () => startExistingGame(img));
+  }
+
+  function startExistingGame(img) {
+    const analysis = analyzePairImage(img);
+    if (analysis.mode === 'verified') startVerifiedGame(img, analysis);
+    else startFreeGame(img, analysis.reason);
   }
 
   // ---------- 生成差异 ----------
@@ -583,6 +622,292 @@ export function create(container, onExit) {
     }
   }
 
+  // ---------- 现成找不同图：自动扫描答案版 ----------
+  function startVerifiedGame(img, analysis) {
+    const game = {
+      iw: img.naturalWidth,
+      ih: img.naturalHeight,
+      diffs: analysis.diffs,
+      mirror: analysis.mirror,
+      found: new Set(),
+      hints: 0,
+      seconds: 0,
+    };
+    const root = setScreen(`
+      <div class="game-page">
+        <div class="game-topbar">
+          <button class="btn btn-secondary" id="sv-back">← 返回</button>
+          <h2>🔍 找出 <b id="sv-found">0</b> / ${game.diffs.length} 处不同</h2>
+          <button class="btn" id="sv-hint">💡 提示</button>
+        </div>
+        <p class="center muted">图片里已经有两幅画面：点击或画圈标出<b>不同之处</b>，左右两边都能点～</p>
+        <div class="sd-single">
+          <div class="sd-imgwrap" id="sv-wrap"><img id="sv-img" alt="找不同图片"><canvas id="sv-overlay"></canvas></div>
+        </div>
+        <div class="sd-timer">⏱️ <span id="sv-time">0</span> 秒</div>
+      </div>`);
+    const wrap = q(root, '#sv-wrap');
+    const cv = q(root, '#sv-overlay');
+    const timeEl = q(root, '#sv-time');
+    const foundEl = q(root, '#sv-found');
+    q(root, '#sv-img').src = img.src;
+    wrap.style.aspectRatio = `${game.iw} / ${game.ih}`;
+
+    const timer = setInterval(() => { game.seconds++; timeEl.textContent = game.seconds; }, 1000);
+    onCleanup(() => clearInterval(timer));
+    q(root, '#sv-back').addEventListener('click', renderMenu);
+
+    let hintTimer = null;
+    let hintIndex = -1;
+    let hintOn = false;
+    q(root, '#sv-hint').addEventListener('click', () => {
+      if (game.found.size >= game.diffs.length || hintTimer) return;
+      game.hints++;
+      hintIndex = game.diffs.findIndex((d, i) => !game.found.has(i));
+      if (hintIndex < 0) return;
+      hintOn = true;
+      redraw();
+      hintTimer = setInterval(() => { hintOn = !hintOn; redraw(); }, 320);
+      setTimeout(() => { clearInterval(hintTimer); hintTimer = null; hintOn = false; redraw(); }, 3200);
+      onCleanup(() => clearInterval(hintTimer));
+    });
+
+    const off = onPointerDrag(wrap, {
+      down: () => {},
+      move: (p, start) => drawGesture(p, start, true),
+      up: (p, start) => { drawGesture(p, start, false); handleTap(start, p); },
+    });
+    onCleanup(off);
+
+    function toNat(px, py) {
+      const rect = wrap.getBoundingClientRect();
+      return { x: px / rect.width * game.iw, y: py / rect.height * game.ih };
+    }
+
+    function nearDiff(pt, d, extra = 0) {
+      const base = Math.hypot(pt.x - d.x, pt.y - d.y);
+      const mirrored = Math.hypot(pt.x - (d.x + game.mirror.x), pt.y - (d.y + game.mirror.y));
+      return Math.min(base, mirrored) < d.r * 1.5 + extra;
+    }
+
+    function drawGesture(p, start, on) {
+      redraw();
+      if (!on || !p) return;
+      const c = cv.getContext('2d');
+      c.strokeStyle = '#ff7043';
+      c.lineWidth = 3;
+      c.setLineDash([8, 6]);
+      if (isTap(start, p, 8)) {
+        c.beginPath(); c.arc(p.x, p.y, 10, 0, Math.PI * 2); c.stroke();
+      } else {
+        c.beginPath(); c.arc((start.x + p.x) / 2, (start.y + p.y) / 2, Math.hypot(p.x - start.x, p.y - start.y) / 2, 0, Math.PI * 2); c.stroke();
+      }
+      c.setLineDash([]);
+    }
+
+    function handleTap(start, p) {
+      const rect = wrap.getBoundingClientRect();
+      if (!rect.width) return;
+      const hits = [];
+      if (isTap(start, p, 8)) {
+        const pt = toNat(p.x, p.y);
+        game.diffs.forEach((d, i) => { if (!game.found.has(i) && nearDiff(pt, d)) hits.push(i); });
+      } else {
+        const cn = toNat((start.x + p.x) / 2, (start.y + p.y) / 2);
+        const cr = Math.hypot(p.x - start.x, p.y - start.y) / 2 * (game.iw / rect.width);
+        game.diffs.forEach((d, i) => { if (!game.found.has(i) && nearDiff(cn, d, cr + d.r * 0.8)) hits.push(i); });
+      }
+      if (hits.length) {
+        hits.forEach(i => game.found.add(i));
+        ding();
+        foundEl.textContent = game.found.size;
+        redraw();
+        if (game.found.size >= game.diffs.length) showWin();
+      } else {
+        buzz();
+      }
+    }
+
+    function redraw() {
+      const rect = wrap.getBoundingClientRect();
+      if (!rect.width) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      cv.width = Math.round(rect.width * dpr);
+      cv.height = Math.round(rect.height * dpr);
+      const c = cv.getContext('2d');
+      c.scale(dpr, dpr);
+      c.clearRect(0, 0, rect.width, rect.height);
+      const sx = rect.width / game.iw;
+      const sy = rect.height / game.ih;
+      const drawMark = (d) => {
+        const px = d.x * sx;
+        const py = d.y * sy;
+        const pr = Math.max(14, d.r * sx);
+        c.fillStyle = 'rgba(76, 175, 80, .28)';
+        c.strokeStyle = '#2e7d32';
+        c.lineWidth = 4;
+        c.beginPath(); c.arc(px, py, pr, 0, Math.PI * 2); c.fill(); c.stroke();
+        c.fillStyle = '#2e7d32';
+        c.font = `bold ${Math.round(pr * 0.95)}px sans-serif`;
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.fillText('✓', px, py + 1);
+      };
+      game.diffs.forEach((d, i) => {
+        if (!game.found.has(i)) return;
+        drawMark(d);
+        drawMark({ x: d.x + game.mirror.x, y: d.y + game.mirror.y, r: d.r });
+      });
+      if (hintOn && hintIndex >= 0 && !game.found.has(hintIndex)) {
+        const d = game.diffs[hintIndex];
+        c.strokeStyle = '#ffb300';
+        c.lineWidth = 5;
+        c.setLineDash([12, 8]);
+        [d, { x: d.x + game.mirror.x, y: d.y + game.mirror.y, r: d.r }].forEach(h => {
+          c.beginPath(); c.arc(h.x * sx, h.y * sy, Math.max(20, h.r * sx), 0, Math.PI * 2); c.stroke();
+        });
+        c.setLineDash([]);
+      }
+    }
+
+    function showWin() {
+      win();
+      const stars = Math.max(1, 3 - game.hints);
+      const overlay = document.createElement('div');
+      overlay.className = 'win-overlay';
+      overlay.innerHTML = `
+        <div class="win-card">
+          <h2>🎉 全部找到！</h2>
+          <p>用时 <b>${game.seconds}</b> 秒 · 提示 <b>${game.hints}</b> 次</p>
+          <p class="stars">${'⭐'.repeat(stars)}${'☆'.repeat(3 - stars)}</p>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" id="sv-new">🖼️ 换一张</button>
+            <button class="btn btn-primary" id="sv-again">🔄 再玩一次</button>
+          </div>
+        </div>`;
+      container.appendChild(overlay);
+      onCleanup(() => overlay.remove());
+      q(overlay, '#sv-new').addEventListener('click', () => { overlay.remove(); renderMenu(); });
+      q(overlay, '#sv-again').addEventListener('click', () => { overlay.remove(); startVerifiedGame(img, analysis); });
+    }
+  }
+
+  // ---------- 现成找不同图：自由标记版（扫描不出答案时的兜底） ----------
+  function startFreeGame(img, reason) {
+    const game = { iw: img.naturalWidth, ih: img.naturalHeight, marks: [], seconds: 0 };
+    const root = setScreen(`
+      <div class="game-page">
+        <div class="game-topbar">
+          <button class="btn btn-secondary" id="sf-back">← 返回</button>
+          <h2>🔍 找不同 · 自由标记</h2>
+          <button class="btn btn-primary" id="sf-done">✅ 完成</button>
+        </div>
+        <p class="center muted">${escapeHtml(reason || '图片保持原样')}：找到不同就<b>点一下</b>标记，点错再点一下可以取消。</p>
+        <div class="sd-single">
+          <div class="sd-imgwrap" id="sf-wrap"><img id="sf-img" alt="找不同图片"><canvas id="sf-overlay"></canvas></div>
+        </div>
+        <div class="sd-timer">⏱️ <span id="sf-time">0</span> 秒 · 已标记 <b id="sf-count">0</b> 处</div>
+      </div>`);
+    const wrap = q(root, '#sf-wrap');
+    const cv = q(root, '#sf-overlay');
+    const timeEl = q(root, '#sf-time');
+    const countEl = q(root, '#sf-count');
+    q(root, '#sf-img').src = img.src;
+    wrap.style.aspectRatio = `${game.iw} / ${game.ih}`;
+
+    const timer = setInterval(() => { game.seconds++; timeEl.textContent = game.seconds; }, 1000);
+    onCleanup(() => clearInterval(timer));
+    q(root, '#sf-back').addEventListener('click', renderMenu);
+    q(root, '#sf-done').addEventListener('click', finish);
+
+    const off = onPointerDrag(wrap, {
+      down: () => {},
+      move: (p, start) => drawGesture(p, start, true),
+      up: (p, start) => { drawGesture(p, start, false); addMark(start, p); },
+    });
+    onCleanup(off);
+
+    function toNat(px, py) {
+      const rect = wrap.getBoundingClientRect();
+      return { x: px / rect.width * game.iw, y: py / rect.height * game.ih };
+    }
+
+    function drawGesture(p, start, on) {
+      redraw();
+      if (!on || !p) return;
+      const c = cv.getContext('2d');
+      c.strokeStyle = '#ff7043';
+      c.lineWidth = 3;
+      c.setLineDash([8, 6]);
+      if (isTap(start, p, 8)) {
+        c.beginPath(); c.arc(p.x, p.y, 10, 0, Math.PI * 2); c.stroke();
+      } else {
+        c.beginPath(); c.arc((start.x + p.x) / 2, (start.y + p.y) / 2, Math.hypot(p.x - start.x, p.y - start.y) / 2, 0, Math.PI * 2); c.stroke();
+      }
+      c.setLineDash([]);
+    }
+
+    function addMark(start, p) {
+      const rect = wrap.getBoundingClientRect();
+      if (!rect.width) return;
+      const pt = toNat(p.x, p.y);
+      const r = Math.max(20, Math.min(game.iw, game.ih) * 0.045);
+      const hit = game.marks.findIndex(m => Math.hypot(m.x - pt.x, m.y - pt.y) < m.r * 1.5);
+      if (hit >= 0) { game.marks.splice(hit, 1); buzz(); }
+      else { game.marks.push({ x: pt.x, y: pt.y, r }); ding(); }
+      countEl.textContent = game.marks.length;
+      redraw();
+    }
+
+    function redraw() {
+      const rect = wrap.getBoundingClientRect();
+      if (!rect.width) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      cv.width = Math.round(rect.width * dpr);
+      cv.height = Math.round(rect.height * dpr);
+      const c = cv.getContext('2d');
+      c.scale(dpr, dpr);
+      c.clearRect(0, 0, rect.width, rect.height);
+      const sx = rect.width / game.iw;
+      const sy = rect.height / game.ih;
+      game.marks.forEach((m, i) => {
+        const px = m.x * sx;
+        const py = m.y * sy;
+        const pr = Math.max(14, m.r * sx);
+        c.fillStyle = 'rgba(76, 175, 80, .28)';
+        c.strokeStyle = '#2e7d32';
+        c.lineWidth = 4;
+        c.beginPath(); c.arc(px, py, pr, 0, Math.PI * 2); c.fill(); c.stroke();
+        c.fillStyle = '#2e7d32';
+        c.font = `bold ${Math.round(pr * 0.95)}px sans-serif`;
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.fillText(String(i + 1), px, py + 1);
+      });
+    }
+
+    function finish() {
+      const stars = game.marks.length >= 5 ? 3 : game.marks.length >= 3 ? 2 : 1;
+      const overlay = document.createElement('div');
+      overlay.className = 'win-overlay';
+      overlay.innerHTML = `
+        <div class="win-card">
+          <h2>🔍 标记完成！</h2>
+          <p>找到了 <b>${game.marks.length}</b> 处不同 · 用时 <b>${game.seconds}</b> 秒</p>
+          <p class="stars">${'⭐'.repeat(stars)}${'☆'.repeat(3 - stars)}</p>
+          <p class="muted">标记错了可以点掉重标，多找几遍更专注～</p>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" id="sf-new">🖼️ 换一张</button>
+            <button class="btn btn-primary" id="sf-again">🔄 再玩一次</button>
+          </div>
+        </div>`;
+      container.appendChild(overlay);
+      onCleanup(() => overlay.remove());
+      q(overlay, '#sf-new').addEventListener('click', () => { overlay.remove(); renderMenu(); });
+      q(overlay, '#sf-again').addEventListener('click', () => { overlay.remove(); startFreeGame(img, reason); });
+    }
+  }
+
   renderMenu();
   return cleanupAll;
 }
@@ -623,6 +948,154 @@ function hslToRgb(h, s, l) {
   };
   return [Math.round(f(h / 360 + 1 / 3) * 255), Math.round(f(h / 360) * 255), Math.round(f(h / 360 - 1 / 3) * 255)];
 }
+
+// ---------- 现成找不同图的本地扫描（无需联网 AI） ----------
+function analyzePairImage(img) {
+  const MAX = 640;
+  const sc = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+  const iw = Math.max(1, Math.round(img.naturalWidth * sc));
+  const ih = Math.max(1, Math.round(img.naturalHeight * sc));
+  const cv = document.createElement('canvas');
+  cv.width = iw;
+  cv.height = ih;
+  const c = cv.getContext('2d');
+  c.drawImage(img, 0, 0, iw, ih);
+  let data;
+  try {
+    data = c.getImageData(0, 0, iw, ih).data;
+  } catch {
+    return { mode: 'free', reason: '这张图无法读取像素，请直接自由标记' };
+  }
+  const v = compareHalves(data, iw, ih, 'v');
+  const h = compareHalves(data, iw, ih, 'h');
+  const best = v.cost <= h.cost ? v : h;
+  if (best.cost > 34) {
+    return { mode: 'free', reason: '没有检测到左右/上下并排的两幅画面，直接自由标记' };
+  }
+  const blobs = findDiffBlobs(best.mask, iw, ih);
+  if (blobs.length < 3) {
+    return { mode: 'free', reason: '检测到的差异太少，直接自由标记' };
+  }
+  const k = 1 / sc;
+  const minDim = Math.min(img.naturalWidth, img.naturalHeight);
+  const diffs = blobs.slice(0, 10).map(b => ({
+    x: b.cx * k,
+    y: b.cy * k,
+    r: Math.min(Math.max(20, b.r * k), minDim * 0.08),
+  }));
+  return {
+    mode: 'verified',
+    diffs,
+    mirror: { x: best.ox * k, y: best.oy * k },
+  };
+}
+
+function compareHalves(data, iw, ih, orient) {
+  const margin = Math.max(4, Math.floor(Math.min(iw, ih) * 0.04));
+  const w1 = orient === 'v' ? iw >> 1 : iw;
+  const h1 = orient === 'v' ? ih : ih >> 1;
+  const ox = orient === 'v' ? iw >> 1 : 0;
+  const oy = orient === 'v' ? 0 : ih >> 1;
+
+  let best = { cost: Infinity, dx: 0, dy: 0 };
+  for (let dy = -6; dy <= 6; dy++) {
+    for (let dx = -6; dx <= 6; dx++) {
+      let sum = 0;
+      let n = 0;
+      for (let y = margin; y < h1 - margin; y += 2) {
+        for (let x = margin; x < w1 - margin; x += 2) {
+          const bx = x + ox + dx;
+          const by = y + oy + dy;
+          if (bx < 0 || by < 0 || bx >= iw || by >= ih) continue;
+          const k1 = (y * iw + x) * 4;
+          const k2 = (by * iw + bx) * 4;
+          sum += Math.abs(data[k1] - data[k2])
+            + Math.abs(data[k1 + 1] - data[k2 + 1])
+            + Math.abs(data[k1 + 2] - data[k2 + 2]);
+          n++;
+        }
+      }
+      const cost = n ? sum / n : Infinity;
+      if (cost < best.cost) best = { cost, dx, dy };
+    }
+  }
+
+  const mask = new Uint8Array(iw * ih);
+  const th = 90;
+  for (let y = margin; y < h1 - margin; y++) {
+    for (let x = margin; x < w1 - margin; x++) {
+      const bx = x + ox + best.dx;
+      const by = y + oy + best.dy;
+      if (bx < 0 || by < 0 || bx >= iw || by >= ih) continue;
+      const k1 = (y * iw + x) * 4;
+      const k2 = (by * iw + bx) * 4;
+      const d = Math.abs(data[k1] - data[k2])
+        + Math.abs(data[k1 + 1] - data[k2 + 1])
+        + Math.abs(data[k1 + 2] - data[k2 + 2]);
+      if (d > th) mask[y * iw + x] = 1;
+    }
+  }
+  return { orient, cost: best.cost, mask, ox, oy, dx: best.dx, dy: best.dy };
+}
+
+function findDiffBlobs(mask, iw, ih) {
+  // 轻微膨胀连接邻近像素
+  const dil = new Uint8Array(iw * ih);
+  for (let y = 1; y < ih - 1; y++) {
+    for (let x = 1; x < iw - 1; x++) {
+      let s = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) s += mask[(y + dy) * iw + (x + dx)];
+      }
+      if (s >= 2) dil[y * iw + x] = 1;
+    }
+  }
+  const visited = new Uint8Array(iw * ih);
+  const blobs = [];
+  const minArea = 20;
+  for (let y = 0; y < ih; y++) {
+    for (let x = 0; x < iw; x++) {
+      const idx = y * iw + x;
+      if (!dil[idx] || visited[idx]) continue;
+      const stack = [idx];
+      visited[idx] = 1;
+      let minX = x, maxX = x, minY = y, maxY = y, area = 0, sx = 0, sy = 0;
+      while (stack.length) {
+        const cur = stack.pop();
+        const cx = cur % iw;
+        const cy = (cur / iw) | 0;
+        area++;
+        sx += cx;
+        sy += cy;
+        if (cx < minX) minX = cx;
+        if (cx > maxX) maxX = cx;
+        if (cy < minY) minY = cy;
+        if (cy > maxY) maxY = cy;
+        const neigh = [cur - 1, cur + 1, cur - iw, cur + iw, cur - iw - 1, cur - iw + 1, cur + iw - 1, cur + iw + 1];
+        for (const nn of neigh) {
+          if (nn < 0 || nn >= iw * ih) continue;
+          if (dil[nn] && !visited[nn]) { visited[nn] = 1; stack.push(nn); }
+        }
+      }
+      if (area < minArea) continue;
+      const w = maxX - minX + 1;
+      const h = maxY - minY + 1;
+      if (w > iw * 0.45 || h > ih * 0.45) continue;
+      blobs.push({ cx: sx / area, cy: sy / area, r: Math.max(w, h) / 2, area });
+    }
+  }
+  blobs.sort((a, b) => b.area - a.area);
+  const merged = [];
+  for (const b of blobs) {
+    const near = merged.find(m => Math.hypot(m.cx - b.cx, m.cy - b.cy) < 28);
+    if (near) near.area += b.area;
+    else merged.push({ cx: b.cx, cy: b.cy, r: b.r, area: b.area });
+  }
+  merged.sort((a, b) => b.area - a.area);
+  return merged;
+}
+
+export const __internals = { compareHalves, findDiffBlobs };
 
 // ---------- 全局提示 ----------
 let toastTimer = null;

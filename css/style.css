@@ -156,6 +156,17 @@ textarea {
   background-repeat: no-repeat; pointer-events: none;
 }
 .sd-timer { text-align: center; margin-top: 12px; font-size: 17px; font-weight: 700; color: var(--blue-d); }
+.sd-single { max-width: 760px; margin: 0 auto; }
+.sd-mode-options { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.sd-mode {
+  display: flex; gap: 14px; align-items: center; text-align: left;
+  background: #f5f7fa; border: 3px solid transparent; border-radius: 16px;
+  padding: 14px; transition: transform .12s;
+}
+.sd-mode:active { transform: scale(.98); }
+.sd-mode .mode-icon { font-size: 34px; flex: none; }
+.sd-mode .mode-title { font-weight: 800; font-size: 16px; margin-bottom: 3px; }
+.sd-mode .mode-desc { font-size: 13px; color: var(--muted); line-height: 1.5; }
 
 .gal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; margin-top: 12px; }
 .gal-item {
