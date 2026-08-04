@@ -115,7 +115,7 @@ export function create(container, onExit) {
       spawnT -= dt;
       if (spawnT <= 0) {
         spawn();
-        spawnT = Math.max(0.5, 1.05 - level * 0.06);
+        spawnT = Math.max(0.6, 1.25 - level * 0.05);
       }
       items.forEach(it => { it.y += it.vy * dt; });
       items = items.filter(it => it.y < H + 60);
@@ -130,7 +130,7 @@ export function create(container, onExit) {
     items.push({
       x: 50 + Math.random() * (W - 100),
       y: -40,
-      vy: 120 + level * 22 + Math.random() * 60,
+      vy: Math.min(230, 85 + level * 12 + Math.random() * 35),
       emoji: pool[Math.floor(Math.random() * pool.length)],
       safe,
       r: 34,
