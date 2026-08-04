@@ -107,7 +107,6 @@ kids-focus/
 
 <img src="assets/donate-qr.png" alt="打赏收款码" width="260">
 
-**（把收款码图片保存为 `assets/donate-qr.png` 即可显示，建议使用 400×400 以上的清晰图片）**
 
 </div>
 
