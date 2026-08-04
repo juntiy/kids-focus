@@ -83,7 +83,8 @@ kids-focus/
 │   └── games/          # Six game modules
 ├── assets/
 │   ├── logo.svg        # Project logo
-│   └── donate-qr.png   # Donation QR code (replace with yours)
+│   ├── donate-qr.png   # Alipay QR code
+│   └── wechat-qr.png   # WeChat QR code
 └── README.md
 ```
 
@@ -107,10 +108,10 @@ If this project helps your kids, feel free to buy us a coffee ☕
 
 <div align="center">
 
-<img src="assets/donate-qr.png" alt="Donation QR code" width="260">
+<img src="assets/donate-qr.png" alt="Alipay QR code" width="240">
+<img src="assets/wechat-qr.png" alt="WeChat QR code" width="240">
 
-**(Save your payment QR code as `assets/donate-qr.png` to display it here; a 400×400+ clear image is recommended)**
-
+*Scan with Alipay / WeChat to buy us a coffee ☕*
 </div>
 
 Every bit of support fuels our work on educational content for kids. Thank you! ❤️

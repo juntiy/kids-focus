@@ -83,7 +83,8 @@ kids-focus/
 │   └── games/          # 六个小游戏模块
 ├── assets/
 │   ├── logo.svg        # 项目 Logo
-│   └── donate-qr.png   # 打赏收款码（自行替换）
+│   ├── donate-qr.png   # 支付宝收款码
+│   └── wechat-qr.png   # 微信收款码
 └── README.md
 ```
 
@@ -107,8 +108,10 @@ kids-focus/
 
 <div align="center">
 
-<img src="assets/donate-qr.png" alt="打赏收款码" width="260">
+<img src="assets/donate-qr.png" alt="支付宝收款码" width="240">
+<img src="assets/wechat-qr.png" alt="微信收款码" width="240">
 
+*支付宝 / 微信扫一扫，请我们喝杯咖啡～*
 
 </div>
 
