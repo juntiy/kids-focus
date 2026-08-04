@@ -28,7 +28,7 @@ export function create(container, onExit) {
   let items = [];
   let lives = 3;
   let score = 0;
-  let level = 1;
+  let elapsed = 0;
   let spawnT = 1.1;
   let lastTap = 0;
   let best = Number(localStorage.getItem(bestKey) || 0);
@@ -37,8 +37,8 @@ export function create(container, onExit) {
     items = [];
     lives = 3;
     score = 0;
-    level = 1;
-    spawnT = 0.6;
+    elapsed = 0;
+    spawnT = 1.6;
     state = 'play';
   }
 
@@ -50,7 +50,7 @@ export function create(container, onExit) {
           <h2>⚡ 防触电</h2>
           <span id="sh-lives">❤️❤️❤️</span>
         </div>
-        <p class="center muted">点击<b>安全物品</b>得分，<b>千万别碰</b>带电的 ⚡ 和 🔌！</p>
+        <p class="center muted">点击<b>安全物品</b>得分，<b>千万别碰</b>带电的 ⚡ 和 🔌！前 30 秒保持慢速，慢慢熟悉～</p>
         <div class="canvas-wrap" id="sh-wrap"><canvas id="sh-canvas"></canvas></div>
         <p class="center muted" style="margin-top:8px">得分：<b id="sh-score">0</b></p>
       </div>`);
@@ -95,7 +95,6 @@ export function create(container, onExit) {
       score++;
       ding();
       floatPlus(px, py);
-      if (score % 10 === 0) level++;
       updateHud();
     } else {
       lives--;
@@ -112,10 +111,11 @@ export function create(container, onExit) {
     const dt = Math.min(0.033, (t - lastT) / 1000 || 0.016);
     lastT = t;
     if (state === 'play') {
+      elapsed += dt;
       spawnT -= dt;
       if (spawnT <= 0) {
         spawn();
-        spawnT = Math.max(0.8, 1.6 - level * 0.05);
+        spawnT = Math.max(0.9, 1.8 - Math.max(0, elapsed - 30) * 0.02);
       }
       items.forEach(it => { it.y += it.vy * dt; });
       items = items.filter(it => it.y < H + 60);
@@ -130,7 +130,7 @@ export function create(container, onExit) {
     items.push({
       x: 50 + Math.random() * (W - 100),
       y: -40,
-      vy: Math.min(140, 50 + level * 7 + Math.random() * 20),
+      vy: Math.min(120, 40 + Math.max(0, elapsed - 30) * 2.5) + Math.random() * 10,
       emoji: pool[Math.floor(Math.random() * pool.length)],
       safe,
       r: 34,
