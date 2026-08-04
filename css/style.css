@@ -167,6 +167,7 @@ textarea {
 .sd-mode .mode-icon { font-size: 34px; flex: none; }
 .sd-mode .mode-title { font-weight: 800; font-size: 16px; margin-bottom: 3px; }
 .sd-mode .mode-desc { font-size: 13px; color: var(--muted); line-height: 1.5; }
+.so-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
 .gal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; margin-top: 12px; }
 .gal-item {

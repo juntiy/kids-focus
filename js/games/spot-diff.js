@@ -9,13 +9,12 @@ export const icon = '🔍';
 export const desc = '点击或画圈，找出两张图片的不同之处';
 
 const DIFF_COUNT = 5;
-const EMOJIS = ['⭐', '🎈', '🌸', '🍄', '🐞', '🌻', '🦋', '🎀', '🍀', '🐟'];
 const PATCH_FILTERS = [
-  'hue-rotate(110deg) saturate(1.25)',
-  'brightness(1.5) contrast(1.15)',
-  'invert(1)',
-  'blur(2.5px) brightness(1.1)',
-  'hue-rotate(65deg) brightness(0.9)',
+  'hue-rotate(35deg) saturate(1.1)',
+  'brightness(1.2) contrast(1.04)',
+  'saturate(1.4)',
+  'blur(1.5px) brightness(1.03)',
+  'hue-rotate(-30deg) brightness(0.94)',
 ];
 
 function escapeHtml(s) {
@@ -247,8 +246,198 @@ export function create(container, onExit) {
 
   function startExistingGame(img) {
     const analysis = analyzePairImage(img);
-    if (analysis.mode === 'verified') startVerifiedGame(img, analysis);
-    else startFreeGame(img, analysis.reason);
+    startOriginalGame(img, analysis);
+  }
+
+  // ---------- 现成找不同图：孩子手绘标记 + AI 提示/最终答案 ----------
+  function startOriginalGame(img, analysis) {
+    const answers = analysis.mode === 'verified' ? analysis.diffs : null;
+    const mirror = analysis.mirror || { x: 0, y: 0 };
+    const game = {
+      iw: img.naturalWidth,
+      ih: img.naturalHeight,
+      marks: [],
+      answers,
+      mirror,
+      hintsUsed: 0,
+      seconds: 0,
+      done: false,
+    };
+    const root = setScreen(`
+      <div class="game-page">
+        <div class="game-topbar">
+          <button class="btn btn-secondary" id="so-back">← 返回</button>
+          <h2>🔍 原图找不同</h2>
+          <span class="so-actions">
+            ${answers ? '<button class="btn" id="so-hint">💡 提示</button>' : ''}
+            <button class="btn" id="so-undo">↩️ 撤销</button>
+            <button class="btn btn-primary" id="so-done">✅ 完成</button>
+          </span>
+        </div>
+        <p class="center muted">${answers
+          ? '找到不同就用手画个圈标记，标错了按「撤销」。想不出来点「提示」，最后按「完成」看 AI 全部答案。'
+          : '找到不同就点一下做个手绘标记，标错了按「撤销」。（这张图 AI 没扫描出答案，就自由找吧）'}</p>
+        <div class="sd-single">
+          <div class="sd-imgwrap" id="so-wrap"><img id="so-img" alt="找不同图片"><canvas id="so-overlay"></canvas></div>
+        </div>
+        <div class="sd-timer">⏱️ <span id="so-time">0</span> 秒 · 已标记 <b id="so-count">0</b> 处</div>
+      </div>`);
+    const wrap = q(root, '#so-wrap');
+    const cv = q(root, '#so-overlay');
+    const timeEl = q(root, '#so-time');
+    const countEl = q(root, '#so-count');
+    q(root, '#so-img').src = img.src;
+    wrap.style.aspectRatio = `${game.iw} / ${game.ih}`;
+
+    const timer = setInterval(() => {
+      if (!game.done) { game.seconds++; timeEl.textContent = game.seconds; }
+    }, 1000);
+    onCleanup(() => clearInterval(timer));
+    q(root, '#so-back').addEventListener('click', renderMenu);
+    q(root, '#so-undo').addEventListener('click', () => {
+      if (game.done) return;
+      if (!game.marks.length) { toast('还没有标记可以撤销'); return; }
+      game.marks.pop();
+      countEl.textContent = game.marks.length;
+      buzz();
+      redraw();
+    });
+    q(root, '#so-done').addEventListener('click', finish);
+
+    let hintTimer = null;
+    let hintIdx = -1;
+    let hintOn = false;
+    const hinted = new Set();
+    if (answers) {
+      q(root, '#so-hint').addEventListener('click', () => {
+        if (game.done || hintTimer) return;
+        game.hintsUsed++;
+        hintIdx = game.answers.findIndex((d, i) => !hinted.has(i));
+        if (hintIdx < 0) { toast('答案都提示过啦，加油自己找～'); return; }
+        hinted.add(hintIdx);
+        hintOn = true;
+        redraw();
+        hintTimer = setInterval(() => { hintOn = !hintOn; redraw(); }, 320);
+        setTimeout(() => { clearInterval(hintTimer); hintTimer = null; hintOn = false; redraw(); }, 3200);
+        onCleanup(() => clearInterval(hintTimer));
+      });
+    }
+
+    const off = onPointerDrag(wrap, {
+      down: () => {},
+      move: (p, start) => drawGesture(p, start, true),
+      up: (p, start) => { drawGesture(p, start, false); addMark(start, p); },
+    });
+    onCleanup(off);
+
+    function toNat(px, py) {
+      const rect = wrap.getBoundingClientRect();
+      return { x: px / rect.width * game.iw, y: py / rect.height * game.ih };
+    }
+
+    function drawGesture(p, start, on) {
+      redraw();
+      if (!on || !p) return;
+      const c = cv.getContext('2d');
+      c.strokeStyle = '#ff7043';
+      c.lineWidth = 3;
+      c.setLineDash([8, 6]);
+      if (isTap(start, p, 8)) {
+        c.beginPath(); c.arc(p.x, p.y, 10, 0, Math.PI * 2); c.stroke();
+      } else {
+        c.beginPath(); c.arc((start.x + p.x) / 2, (start.y + p.y) / 2, Math.hypot(p.x - start.x, p.y - start.y) / 2, 0, Math.PI * 2); c.stroke();
+      }
+      c.setLineDash([]);
+    }
+
+    function addMark(start, p) {
+      if (game.done) return;
+      const rect = wrap.getBoundingClientRect();
+      if (!rect.width) return;
+      const baseR = Math.max(20, Math.min(game.iw, game.ih) * 0.05);
+      let pt;
+      let r;
+      let rot;
+      if (isTap(start, p, 8)) {
+        pt = toNat(p.x, p.y);
+        r = baseR;
+        rot = -0.35 + Math.random() * 0.7;
+      } else {
+        pt = toNat((start.x + p.x) / 2, (start.y + p.y) / 2);
+        r = Math.max(baseR, Math.hypot(p.x - start.x, p.y - start.y) / 2 * (game.iw / rect.width));
+        rot = -0.5 + Math.random() * 1.0;
+      }
+      const hit = game.marks.findIndex(m => Math.hypot(m.x - pt.x, m.y - pt.y) < m.r * 1.5);
+      if (hit >= 0) { game.marks.splice(hit, 1); buzz(); }
+      else { game.marks.push({ x: pt.x, y: pt.y, r, rot }); ding(); }
+      countEl.textContent = game.marks.length;
+      redraw();
+    }
+
+    function redraw() {
+      const rect = wrap.getBoundingClientRect();
+      if (!rect.width) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      cv.width = Math.round(rect.width * dpr);
+      cv.height = Math.round(rect.height * dpr);
+      const c = cv.getContext('2d');
+      c.scale(dpr, dpr);
+      c.clearRect(0, 0, rect.width, rect.height);
+      const sx = rect.width / game.iw;
+      const sy = rect.height / game.ih;
+      game.marks.forEach(m => {
+        drawHandMark(c, m.x * sx, m.y * sy, Math.max(14, m.r * sx), '#ff7043', m.rot);
+      });
+      if (answers && (hintOn || game.done)) {
+        game.answers.forEach((d, i) => {
+          if (hintOn && i !== hintIdx) return;
+          const r = Math.max(14, d.r * sx);
+          drawNumberedMark(c, d.x * sx, d.y * sy, r, i + 1);
+          drawNumberedMark(c, (d.x + mirror.x) * sx, (d.y + mirror.y) * sy, r, i + 1);
+        });
+      }
+    }
+
+    function finish() {
+      if (game.done) return;
+      game.done = true;
+      let stars;
+      let text;
+      if (answers) {
+        let matched = 0;
+        for (const d of game.answers) {
+          const hit = game.marks.some(m => {
+            const b = Math.hypot(m.x - d.x, m.y - d.y);
+            const mb = Math.hypot(m.x - (d.x + mirror.x), m.y - (d.y + mirror.y));
+            return Math.min(b, mb) < d.r * 1.6;
+          });
+          if (hit) matched++;
+        }
+        stars = matched >= game.answers.length ? 3 : matched >= Math.ceil(game.answers.length * 0.6) ? 2 : 1;
+        text = `你找到了 <b>${matched}</b> 处，AI 共发现 <b>${game.answers.length}</b> 处`;
+      } else {
+        stars = game.marks.length >= 5 ? 3 : game.marks.length >= 3 ? 2 : 1;
+        text = `找到了 <b>${game.marks.length}</b> 处 · 用时 <b>${game.seconds}</b> 秒`;
+      }
+      redraw();
+      const overlay = document.createElement('div');
+      overlay.className = 'win-overlay';
+      overlay.innerHTML = `
+        <div class="win-card">
+          <h2>🏅 专注力小奖状</h2>
+          <p>${text}</p>
+          <p class="stars">${'⭐'.repeat(stars)}${'☆'.repeat(3 - stars)}</p>
+          <p class="muted">${answers ? '绿色数字圈是 AI 标出的全部答案～' : '标记错了可以点掉重标，多找几遍更专注～'}</p>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" id="so-new">🖼️ 换一张</button>
+            <button class="btn btn-primary" id="so-again">🔄 再玩一次</button>
+          </div>
+        </div>`;
+      container.appendChild(overlay);
+      onCleanup(() => overlay.remove());
+      q(overlay, '#so-new').addEventListener('click', () => { overlay.remove(); renderMenu(); });
+      q(overlay, '#so-again').addEventListener('click', () => { overlay.remove(); startOriginalGame(img, analysis); });
+    }
   }
 
   // ---------- 生成差异 ----------
@@ -273,12 +462,12 @@ export function create(container, onExit) {
     dctx.drawImage(base, 0, 0);
 
     const margin = Math.min(iw, ih) * 0.08;
-    const baseR = Math.min(iw, ih) * 0.065;
+    const baseR = Math.min(iw, ih) * 0.055;
     const diffs = [];
     let attempts = 0;
     while (diffs.length < DIFF_COUNT && attempts < DIFF_COUNT * 40) {
       attempts++;
-      const r = baseR * (0.9 + Math.random() * 0.35);
+      const r = baseR * (0.85 + Math.random() * 0.35);
       const x = margin + Math.random() * (iw - margin * 2);
       const y = margin + Math.random() * (ih - margin * 2);
       if (diffs.some(d => Math.hypot(d.x - x, d.y - y) < d.r + r + baseR)) continue;
@@ -331,7 +520,8 @@ export function create(container, onExit) {
             if (!inCircle(i2, j)) continue;
             const k = (j * rw + i2) * 4;
             const [hh, ss, ll] = rgbToHsl(data[k], data[k + 1], data[k + 2]);
-            const [rr, gg, bb] = hslToRgb((hh + 100 + Math.random() * 40) % 360, Math.min(1, ss + 0.12), ll);
+            const dh = (Math.random() < 0.5 ? -1 : 1) * (25 + Math.random() * 20);
+            const [rr, gg, bb] = hslToRgb((hh + dh + 360) % 360, Math.min(1, ss + 0.05), ll);
             data[k] = rr; data[k + 1] = gg; data[k + 2] = bb;
           }
         }
@@ -341,20 +531,21 @@ export function create(container, onExit) {
           for (let i2 = 0; i2 < rw; i2++) {
             if (!inCircle(i2, j)) continue;
             const k = (j * rw + i2) * 4;
-            data[k] = Math.min(255, data[k] * 1.5);
-            data[k + 1] = Math.min(255, data[k + 1] * 1.5);
-            data[k + 2] = Math.min(255, data[k + 2] * 1.5);
+            const m = 1.12 + Math.random() * 0.12;
+            data[k] = Math.min(255, data[k] * m);
+            data[k + 1] = Math.min(255, data[k + 1] * m);
+            data[k + 2] = Math.min(255, data[k + 2] * m);
           }
         }
       } else if (type === 2) {
-        // 反色
+        // 饱和度微调
         for (let j = 0; j < rh; j++) {
           for (let i2 = 0; i2 < rw; i2++) {
             if (!inCircle(i2, j)) continue;
             const k = (j * rw + i2) * 4;
-            data[k] = 255 - data[k];
-            data[k + 1] = 255 - data[k + 1];
-            data[k + 2] = 255 - data[k + 2];
+            const [hh, ss, ll] = rgbToHsl(data[k], data[k + 1], data[k + 2]);
+            const [rr, gg, bb] = hslToRgb(hh, Math.min(1, ss + 0.16 + Math.random() * 0.1), ll);
+            data[k] = rr; data[k + 1] = gg; data[k + 2] = bb;
           }
         }
       } else if (type === 3) {
@@ -364,8 +555,8 @@ export function create(container, onExit) {
           for (let i2 = 0; i2 < rw; i2++) {
             if (!inCircle(i2, j)) continue;
             let r = 0, g = 0, b = 0, a = 0, n = 0;
-            for (let dj = -2; dj <= 2; dj++) {
-              for (let di = -2; di <= 2; di++) {
+            for (let dj = -1; dj <= 1; dj++) {
+              for (let di = -1; di <= 1; di++) {
                 const ii = i2 + di;
                 const jj = j + dj;
                 if (ii < 0 || jj < 0 || ii >= rw || jj >= rh) continue;
@@ -404,16 +595,6 @@ export function create(container, onExit) {
       dctx.putImageData(img, x0, y0);
     });
 
-    // 在部分差异处“添加”一个可爱小物件（更接近真实找不同）
-    diffs.forEach((d, i) => {
-      if (i % 2 === 1) {
-        const emoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
-        dctx.font = `${Math.round(d.r * 1.8)}px "Segoe UI Emoji", "Apple Color Emoji", serif`;
-        dctx.textAlign = 'center';
-        dctx.textBaseline = 'middle';
-        dctx.fillText(emoji, d.x, d.y + d.r * 0.05);
-      }
-    });
   }
 
   // ---------- 开始游戏 ----------
@@ -560,18 +741,7 @@ export function create(container, onExit) {
         const sy = rect.height / game.ih;
         game.diffs.forEach((d, i) => {
           if (!game.found.has(i)) return;
-          const px = d.x * sx;
-          const py = d.y * sy;
-          const pr = Math.max(14, d.r * sx);
-          c.fillStyle = 'rgba(76, 175, 80, .28)';
-          c.strokeStyle = '#2e7d32';
-          c.lineWidth = 4;
-          c.beginPath(); c.arc(px, py, pr, 0, Math.PI * 2); c.fill(); c.stroke();
-          c.fillStyle = '#2e7d32';
-          c.font = `bold ${Math.round(pr * 0.95)}px sans-serif`;
-          c.textAlign = 'center';
-          c.textBaseline = 'middle';
-          c.fillText('✓', px, py + 1);
+          drawHandMark(c, d.x * sx, d.y * sy, Math.max(14, d.r * sx), '#2e7d32', (i * 0.7) % Math.PI);
         });
       });
       // 提示圈（只画在图 B 上）
@@ -580,11 +750,7 @@ export function create(container, onExit) {
         const cv = game.wrapB.querySelector('canvas');
         const rect = game.wrapB.getBoundingClientRect();
         const c = cv.getContext('2d');
-        c.strokeStyle = '#ffb300';
-        c.lineWidth = 5;
-        c.setLineDash([12, 8]);
-        c.beginPath(); c.arc(d.x * rect.width / game.iw, d.y * rect.height / game.ih, Math.max(20, d.r * rect.width / game.iw), 0, Math.PI * 2); c.stroke();
-        c.setLineDash([]);
+        drawNumberedMark(c, d.x * rect.width / game.iw, d.y * rect.height / game.ih, Math.max(18, d.r * rect.width / game.iw), hintIndex + 1);
       }
     }
 
@@ -619,292 +785,6 @@ export function create(container, onExit) {
       onCleanup(() => overlay.remove());
       q(overlay, '#sd-new').addEventListener('click', () => { overlay.remove(); renderMenu(); });
       q(overlay, '#sd-again').addEventListener('click', () => { overlay.remove(); startGame(img); });
-    }
-  }
-
-  // ---------- 现成找不同图：自动扫描答案版 ----------
-  function startVerifiedGame(img, analysis) {
-    const game = {
-      iw: img.naturalWidth,
-      ih: img.naturalHeight,
-      diffs: analysis.diffs,
-      mirror: analysis.mirror,
-      found: new Set(),
-      hints: 0,
-      seconds: 0,
-    };
-    const root = setScreen(`
-      <div class="game-page">
-        <div class="game-topbar">
-          <button class="btn btn-secondary" id="sv-back">← 返回</button>
-          <h2>🔍 找出 <b id="sv-found">0</b> / ${game.diffs.length} 处不同</h2>
-          <button class="btn" id="sv-hint">💡 提示</button>
-        </div>
-        <p class="center muted">图片里已经有两幅画面：点击或画圈标出<b>不同之处</b>，左右两边都能点～</p>
-        <div class="sd-single">
-          <div class="sd-imgwrap" id="sv-wrap"><img id="sv-img" alt="找不同图片"><canvas id="sv-overlay"></canvas></div>
-        </div>
-        <div class="sd-timer">⏱️ <span id="sv-time">0</span> 秒</div>
-      </div>`);
-    const wrap = q(root, '#sv-wrap');
-    const cv = q(root, '#sv-overlay');
-    const timeEl = q(root, '#sv-time');
-    const foundEl = q(root, '#sv-found');
-    q(root, '#sv-img').src = img.src;
-    wrap.style.aspectRatio = `${game.iw} / ${game.ih}`;
-
-    const timer = setInterval(() => { game.seconds++; timeEl.textContent = game.seconds; }, 1000);
-    onCleanup(() => clearInterval(timer));
-    q(root, '#sv-back').addEventListener('click', renderMenu);
-
-    let hintTimer = null;
-    let hintIndex = -1;
-    let hintOn = false;
-    q(root, '#sv-hint').addEventListener('click', () => {
-      if (game.found.size >= game.diffs.length || hintTimer) return;
-      game.hints++;
-      hintIndex = game.diffs.findIndex((d, i) => !game.found.has(i));
-      if (hintIndex < 0) return;
-      hintOn = true;
-      redraw();
-      hintTimer = setInterval(() => { hintOn = !hintOn; redraw(); }, 320);
-      setTimeout(() => { clearInterval(hintTimer); hintTimer = null; hintOn = false; redraw(); }, 3200);
-      onCleanup(() => clearInterval(hintTimer));
-    });
-
-    const off = onPointerDrag(wrap, {
-      down: () => {},
-      move: (p, start) => drawGesture(p, start, true),
-      up: (p, start) => { drawGesture(p, start, false); handleTap(start, p); },
-    });
-    onCleanup(off);
-
-    function toNat(px, py) {
-      const rect = wrap.getBoundingClientRect();
-      return { x: px / rect.width * game.iw, y: py / rect.height * game.ih };
-    }
-
-    function nearDiff(pt, d, extra = 0) {
-      const base = Math.hypot(pt.x - d.x, pt.y - d.y);
-      const mirrored = Math.hypot(pt.x - (d.x + game.mirror.x), pt.y - (d.y + game.mirror.y));
-      return Math.min(base, mirrored) < d.r * 1.5 + extra;
-    }
-
-    function drawGesture(p, start, on) {
-      redraw();
-      if (!on || !p) return;
-      const c = cv.getContext('2d');
-      c.strokeStyle = '#ff7043';
-      c.lineWidth = 3;
-      c.setLineDash([8, 6]);
-      if (isTap(start, p, 8)) {
-        c.beginPath(); c.arc(p.x, p.y, 10, 0, Math.PI * 2); c.stroke();
-      } else {
-        c.beginPath(); c.arc((start.x + p.x) / 2, (start.y + p.y) / 2, Math.hypot(p.x - start.x, p.y - start.y) / 2, 0, Math.PI * 2); c.stroke();
-      }
-      c.setLineDash([]);
-    }
-
-    function handleTap(start, p) {
-      const rect = wrap.getBoundingClientRect();
-      if (!rect.width) return;
-      const hits = [];
-      if (isTap(start, p, 8)) {
-        const pt = toNat(p.x, p.y);
-        game.diffs.forEach((d, i) => { if (!game.found.has(i) && nearDiff(pt, d)) hits.push(i); });
-      } else {
-        const cn = toNat((start.x + p.x) / 2, (start.y + p.y) / 2);
-        const cr = Math.hypot(p.x - start.x, p.y - start.y) / 2 * (game.iw / rect.width);
-        game.diffs.forEach((d, i) => { if (!game.found.has(i) && nearDiff(cn, d, cr + d.r * 0.8)) hits.push(i); });
-      }
-      if (hits.length) {
-        hits.forEach(i => game.found.add(i));
-        ding();
-        foundEl.textContent = game.found.size;
-        redraw();
-        if (game.found.size >= game.diffs.length) showWin();
-      } else {
-        buzz();
-      }
-    }
-
-    function redraw() {
-      const rect = wrap.getBoundingClientRect();
-      if (!rect.width) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      cv.width = Math.round(rect.width * dpr);
-      cv.height = Math.round(rect.height * dpr);
-      const c = cv.getContext('2d');
-      c.scale(dpr, dpr);
-      c.clearRect(0, 0, rect.width, rect.height);
-      const sx = rect.width / game.iw;
-      const sy = rect.height / game.ih;
-      const drawMark = (d) => {
-        const px = d.x * sx;
-        const py = d.y * sy;
-        const pr = Math.max(14, d.r * sx);
-        c.fillStyle = 'rgba(76, 175, 80, .28)';
-        c.strokeStyle = '#2e7d32';
-        c.lineWidth = 4;
-        c.beginPath(); c.arc(px, py, pr, 0, Math.PI * 2); c.fill(); c.stroke();
-        c.fillStyle = '#2e7d32';
-        c.font = `bold ${Math.round(pr * 0.95)}px sans-serif`;
-        c.textAlign = 'center';
-        c.textBaseline = 'middle';
-        c.fillText('✓', px, py + 1);
-      };
-      game.diffs.forEach((d, i) => {
-        if (!game.found.has(i)) return;
-        drawMark(d);
-        drawMark({ x: d.x + game.mirror.x, y: d.y + game.mirror.y, r: d.r });
-      });
-      if (hintOn && hintIndex >= 0 && !game.found.has(hintIndex)) {
-        const d = game.diffs[hintIndex];
-        c.strokeStyle = '#ffb300';
-        c.lineWidth = 5;
-        c.setLineDash([12, 8]);
-        [d, { x: d.x + game.mirror.x, y: d.y + game.mirror.y, r: d.r }].forEach(h => {
-          c.beginPath(); c.arc(h.x * sx, h.y * sy, Math.max(20, h.r * sx), 0, Math.PI * 2); c.stroke();
-        });
-        c.setLineDash([]);
-      }
-    }
-
-    function showWin() {
-      win();
-      const stars = Math.max(1, 3 - game.hints);
-      const overlay = document.createElement('div');
-      overlay.className = 'win-overlay';
-      overlay.innerHTML = `
-        <div class="win-card">
-          <h2>🎉 全部找到！</h2>
-          <p>用时 <b>${game.seconds}</b> 秒 · 提示 <b>${game.hints}</b> 次</p>
-          <p class="stars">${'⭐'.repeat(stars)}${'☆'.repeat(3 - stars)}</p>
-          <div class="modal-actions">
-            <button class="btn btn-secondary" id="sv-new">🖼️ 换一张</button>
-            <button class="btn btn-primary" id="sv-again">🔄 再玩一次</button>
-          </div>
-        </div>`;
-      container.appendChild(overlay);
-      onCleanup(() => overlay.remove());
-      q(overlay, '#sv-new').addEventListener('click', () => { overlay.remove(); renderMenu(); });
-      q(overlay, '#sv-again').addEventListener('click', () => { overlay.remove(); startVerifiedGame(img, analysis); });
-    }
-  }
-
-  // ---------- 现成找不同图：自由标记版（扫描不出答案时的兜底） ----------
-  function startFreeGame(img, reason) {
-    const game = { iw: img.naturalWidth, ih: img.naturalHeight, marks: [], seconds: 0 };
-    const root = setScreen(`
-      <div class="game-page">
-        <div class="game-topbar">
-          <button class="btn btn-secondary" id="sf-back">← 返回</button>
-          <h2>🔍 找不同 · 自由标记</h2>
-          <button class="btn btn-primary" id="sf-done">✅ 完成</button>
-        </div>
-        <p class="center muted">${escapeHtml(reason || '图片保持原样')}：找到不同就<b>点一下</b>标记，点错再点一下可以取消。</p>
-        <div class="sd-single">
-          <div class="sd-imgwrap" id="sf-wrap"><img id="sf-img" alt="找不同图片"><canvas id="sf-overlay"></canvas></div>
-        </div>
-        <div class="sd-timer">⏱️ <span id="sf-time">0</span> 秒 · 已标记 <b id="sf-count">0</b> 处</div>
-      </div>`);
-    const wrap = q(root, '#sf-wrap');
-    const cv = q(root, '#sf-overlay');
-    const timeEl = q(root, '#sf-time');
-    const countEl = q(root, '#sf-count');
-    q(root, '#sf-img').src = img.src;
-    wrap.style.aspectRatio = `${game.iw} / ${game.ih}`;
-
-    const timer = setInterval(() => { game.seconds++; timeEl.textContent = game.seconds; }, 1000);
-    onCleanup(() => clearInterval(timer));
-    q(root, '#sf-back').addEventListener('click', renderMenu);
-    q(root, '#sf-done').addEventListener('click', finish);
-
-    const off = onPointerDrag(wrap, {
-      down: () => {},
-      move: (p, start) => drawGesture(p, start, true),
-      up: (p, start) => { drawGesture(p, start, false); addMark(start, p); },
-    });
-    onCleanup(off);
-
-    function toNat(px, py) {
-      const rect = wrap.getBoundingClientRect();
-      return { x: px / rect.width * game.iw, y: py / rect.height * game.ih };
-    }
-
-    function drawGesture(p, start, on) {
-      redraw();
-      if (!on || !p) return;
-      const c = cv.getContext('2d');
-      c.strokeStyle = '#ff7043';
-      c.lineWidth = 3;
-      c.setLineDash([8, 6]);
-      if (isTap(start, p, 8)) {
-        c.beginPath(); c.arc(p.x, p.y, 10, 0, Math.PI * 2); c.stroke();
-      } else {
-        c.beginPath(); c.arc((start.x + p.x) / 2, (start.y + p.y) / 2, Math.hypot(p.x - start.x, p.y - start.y) / 2, 0, Math.PI * 2); c.stroke();
-      }
-      c.setLineDash([]);
-    }
-
-    function addMark(start, p) {
-      const rect = wrap.getBoundingClientRect();
-      if (!rect.width) return;
-      const pt = toNat(p.x, p.y);
-      const r = Math.max(20, Math.min(game.iw, game.ih) * 0.045);
-      const hit = game.marks.findIndex(m => Math.hypot(m.x - pt.x, m.y - pt.y) < m.r * 1.5);
-      if (hit >= 0) { game.marks.splice(hit, 1); buzz(); }
-      else { game.marks.push({ x: pt.x, y: pt.y, r }); ding(); }
-      countEl.textContent = game.marks.length;
-      redraw();
-    }
-
-    function redraw() {
-      const rect = wrap.getBoundingClientRect();
-      if (!rect.width) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      cv.width = Math.round(rect.width * dpr);
-      cv.height = Math.round(rect.height * dpr);
-      const c = cv.getContext('2d');
-      c.scale(dpr, dpr);
-      c.clearRect(0, 0, rect.width, rect.height);
-      const sx = rect.width / game.iw;
-      const sy = rect.height / game.ih;
-      game.marks.forEach((m, i) => {
-        const px = m.x * sx;
-        const py = m.y * sy;
-        const pr = Math.max(14, m.r * sx);
-        c.fillStyle = 'rgba(76, 175, 80, .28)';
-        c.strokeStyle = '#2e7d32';
-        c.lineWidth = 4;
-        c.beginPath(); c.arc(px, py, pr, 0, Math.PI * 2); c.fill(); c.stroke();
-        c.fillStyle = '#2e7d32';
-        c.font = `bold ${Math.round(pr * 0.95)}px sans-serif`;
-        c.textAlign = 'center';
-        c.textBaseline = 'middle';
-        c.fillText(String(i + 1), px, py + 1);
-      });
-    }
-
-    function finish() {
-      const stars = game.marks.length >= 5 ? 3 : game.marks.length >= 3 ? 2 : 1;
-      const overlay = document.createElement('div');
-      overlay.className = 'win-overlay';
-      overlay.innerHTML = `
-        <div class="win-card">
-          <h2>🔍 标记完成！</h2>
-          <p>找到了 <b>${game.marks.length}</b> 处不同 · 用时 <b>${game.seconds}</b> 秒</p>
-          <p class="stars">${'⭐'.repeat(stars)}${'☆'.repeat(3 - stars)}</p>
-          <p class="muted">标记错了可以点掉重标，多找几遍更专注～</p>
-          <div class="modal-actions">
-            <button class="btn btn-secondary" id="sf-new">🖼️ 换一张</button>
-            <button class="btn btn-primary" id="sf-again">🔄 再玩一次</button>
-          </div>
-        </div>`;
-      container.appendChild(overlay);
-      onCleanup(() => overlay.remove());
-      q(overlay, '#sf-new').addEventListener('click', () => { overlay.remove(); renderMenu(); });
-      q(overlay, '#sf-again').addEventListener('click', () => { overlay.remove(); startFreeGame(img, reason); });
     }
   }
 
@@ -1096,6 +976,41 @@ function findDiffBlobs(mask, iw, ih) {
 }
 
 export const __internals = { compareHalves, findDiffBlobs };
+
+// 孩子的手绘标记：椭圆、无数字、略带手绘感
+function drawHandMark(c, x, y, r, color = '#ff7043', rot = 0.3) {
+  c.save();
+  c.translate(x, y);
+  c.rotate(rot);
+  c.strokeStyle = color;
+  c.lineWidth = Math.max(4, r * 0.18);
+  c.lineCap = 'round';
+  c.beginPath();
+  c.ellipse(0, 0, r, r * 0.72, 0, 0, Math.PI * 2);
+  c.stroke();
+  c.globalAlpha = 0.5;
+  c.lineWidth = Math.max(2, r * 0.09);
+  c.beginPath();
+  c.ellipse(2.5, 1.8, r * 0.98, r * 0.7, 0.08, 0.2, Math.PI * 2 - 0.3);
+  c.stroke();
+  c.restore();
+}
+
+// AI 给出的答案标记：圆圈 + 数字
+function drawNumberedMark(c, x, y, r, num) {
+  c.fillStyle = 'rgba(46, 125, 50, .30)';
+  c.strokeStyle = '#2e7d32';
+  c.lineWidth = 4;
+  c.beginPath();
+  c.arc(x, y, r, 0, Math.PI * 2);
+  c.fill();
+  c.stroke();
+  c.fillStyle = '#2e7d32';
+  c.font = `bold ${Math.round(Math.max(18, r * 1.05))}px sans-serif`;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillText(num, x, y + 1);
+}
 
 // ---------- 全局提示 ----------
 let toastTimer = null;
