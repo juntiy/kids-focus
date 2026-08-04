@@ -16,6 +16,8 @@
 
 **👉 在线体验：https://juntiy.github.io/kids-focus/**
 
+**中文** | [English](README.en.md)
+
 </div>
 
 ---
