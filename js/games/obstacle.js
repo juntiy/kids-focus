@@ -1,4 +1,3 @@
-import { getPos } from '../touch.js';
 import { lose } from '../sound.js';
 
 export const id = 'obstacle';
@@ -17,6 +16,7 @@ export function create(container, onExit) {
   const cleanupAll = () => { cleanups.forEach(f => { try { f(); } catch { /* noop */ } }); cleanups = []; };
   const setScreen = (html) => { cleanupAll(); container.innerHTML = html; return container; };
   const q = (rootEl, sel) => rootEl.querySelector(sel);
+  const onCleanup = (fn) => cleanups.push(fn);
 
   let canvas = null;
   let ctx = null;
@@ -26,6 +26,7 @@ export function create(container, onExit) {
   let score = 0;
   let speed = 0;
   let spawnT = 0;
+  let lastTap = 0;
   let player = null;
   let obstacles = [];
   let clouds = [];
@@ -34,11 +35,11 @@ export function create(container, onExit) {
   function reset() {
     score = 0;
     speed = 280;
-    spawnT = 1.1;
+    spawnT = 0.8;
     obstacles = [];
     clouds = Array.from({ length: 5 }, (_, i) => ({ x: i * 190 + 40, y: 40 + Math.random() * 100 }));
     player = { x: 130, y: GROUND, vy: 0, r: 34 };
-    state = 'ready';
+    state = 'play';
   }
 
   function renderScreen() {
@@ -58,7 +59,11 @@ export function create(container, onExit) {
     ctx = canvas.getContext('2d');
     q(root, '#ob-back').addEventListener('click', onExit);
     canvas.addEventListener('pointerdown', onTap);
-    onCleanup(() => canvas.removeEventListener('pointerdown', onTap));
+    canvas.addEventListener('touchstart', onTap);
+    onCleanup(() => {
+      canvas.removeEventListener('pointerdown', onTap);
+      canvas.removeEventListener('touchstart', onTap);
+    });
 
     reset();
     lastT = performance.now();
@@ -68,7 +73,9 @@ export function create(container, onExit) {
   }
 
   function onTap() {
-    if (state === 'ready') { state = 'play'; return; }
+    const now = Date.now();
+    if (now - lastTap < 250) return;
+    lastTap = now;
     if (state === 'play' && player.y >= GROUND - 0.5) {
       player.vy = -700;
     }
@@ -162,11 +169,11 @@ export function create(container, onExit) {
     ctx.fillText('🐸', 0, 0);
     ctx.restore();
 
-    if (state === 'ready') {
+    if (state === 'play' && score < 30) {
       ctx.fillStyle = '#37474f';
       ctx.font = 'bold 26px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('👆 点击开始', W / 2, H / 2 - 70);
+      ctx.fillText('👆 点击跳跃！', W / 2, H / 2 - 70);
     }
   }
 
@@ -191,7 +198,6 @@ export function create(container, onExit) {
     q(overlay, '#ob-again').addEventListener('click', () => {
       overlay.remove();
       reset();
-      state = 'play';
     });
   }
 

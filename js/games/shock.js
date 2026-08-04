@@ -17,6 +17,7 @@ export function create(container, onExit) {
   const cleanupAll = () => { cleanups.forEach(f => { try { f(); } catch { /* noop */ } }); cleanups = []; };
   const setScreen = (html) => { cleanupAll(); container.innerHTML = html; return container; };
   const q = (rootEl, sel) => rootEl.querySelector(sel);
+  const onCleanup = (fn) => cleanups.push(fn);
 
   let canvas = null;
   let ctx = null;
@@ -29,6 +30,7 @@ export function create(container, onExit) {
   let score = 0;
   let level = 1;
   let spawnT = 1.1;
+  let lastTap = 0;
   let best = Number(localStorage.getItem(bestKey) || 0);
 
   function reset() {
@@ -36,8 +38,8 @@ export function create(container, onExit) {
     lives = 3;
     score = 0;
     level = 1;
-    spawnT = 1.1;
-    state = 'ready';
+    spawnT = 0.6;
+    state = 'play';
   }
 
   function renderScreen() {
@@ -59,7 +61,11 @@ export function create(container, onExit) {
     ctx = canvas.getContext('2d');
     q(root, '#sh-back').addEventListener('click', onExit);
     canvas.addEventListener('pointerdown', onTap);
-    onCleanup(() => canvas.removeEventListener('pointerdown', onTap));
+    canvas.addEventListener('touchstart', onTap);
+    onCleanup(() => {
+      canvas.removeEventListener('pointerdown', onTap);
+      canvas.removeEventListener('touchstart', onTap);
+    });
 
     reset();
     lastT = performance.now();
@@ -69,7 +75,9 @@ export function create(container, onExit) {
   }
 
   function onTap(e) {
-    if (state === 'ready') { state = 'play'; return; }
+    const now = Date.now();
+    if (now - lastTap < 250) return;
+    lastTap = now;
     if (state === 'over') return;
     const p = getPos(e, canvas);
     const rect = canvas.getBoundingClientRect();
@@ -147,11 +155,11 @@ export function create(container, onExit) {
       ctx.restore();
     }
 
-    if (state === 'ready') {
+    if (score === 0) {
       ctx.fillStyle = '#37474f';
       ctx.font = 'bold 26px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('👆 点击开始', W / 2, H / 2 - 60);
+      ctx.fillText('👆 点击安全物品，别碰 ⚡！', W / 2, H / 2 - 60);
     }
   }
 
@@ -199,7 +207,6 @@ export function create(container, onExit) {
     q(overlay, '#sh-again').addEventListener('click', () => {
       overlay.remove();
       reset();
-      state = 'play';
     });
   }
 

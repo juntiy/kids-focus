@@ -5,13 +5,14 @@ export const name = '找相近颜色';
 export const icon = '🎨';
 export const desc = '在一堆相近颜色里，找到唯一不一样的那一个';
 
-const ROUNDS = 10;
+const ROUNDS = 12;
 
 export function create(container, onExit) {
   let cleanups = [];
   const cleanupAll = () => { cleanups.forEach(f => { try { f(); } catch { /* noop */ } }); cleanups = []; };
   const setScreen = (html) => { cleanupAll(); container.innerHTML = html; return container; };
   const q = (rootEl, sel) => rootEl.querySelector(sel);
+  const onCleanup = (fn) => cleanups.push(fn);
 
   let rootEl = null;
   let round = 0;
@@ -47,14 +48,16 @@ export function create(container, onExit) {
   function newRound() {
     round++;
     if (round > ROUNDS) { finish(); return; }
-    gridN = round <= 4 ? 4 : round <= 7 ? 6 : 8;
+    gridN = round <= 5 ? 4 : round <= 9 ? 6 : 8;
     const hue = Math.random() * 360;
     const sat = 62 + Math.random() * 18;
     const light = 50 + Math.random() * 14;
-    const delta = Math.max(3, Math.round(13 - round * 0.9));
+    const delta = Math.max(4, Math.round(18 - round * 1.1));
     const base = `hsl(${hue.toFixed(1)}, ${sat.toFixed(1)}%, ${light.toFixed(1)}%)`;
     const oh = (hue + (Math.random() < 0.5 ? -delta : delta) + 360) % 360;
-    const odd = `hsl(${oh.toFixed(1)}, ${sat.toFixed(1)}%, ${light.toFixed(1)}%)`;
+    const os = Math.min(100, sat + 4);
+    const ol = Math.min(88, light + (round <= 6 ? 6 : 4));
+    const odd = `hsl(${oh.toFixed(1)}, ${os.toFixed(1)}%, ${ol.toFixed(1)}%)`;
     oddIndex = Math.floor(Math.random() * gridN * gridN);
 
     const board = q(rootEl, '#cm-board');
@@ -92,7 +95,7 @@ export function create(container, onExit) {
 
   function startTimer() {
     clearInterval(timerId);
-    timeLeft = Math.max(4, 9 - round * 0.35);
+    timeLeft = Math.max(5, 11 - round * 0.4);
     timeTotal = timeLeft;
     updateHud();
     timerId = setInterval(() => {
@@ -123,7 +126,7 @@ export function create(container, onExit) {
 
   function finish() {
     win();
-    const stars = score >= 9 ? 3 : score >= 6 ? 2 : 1;
+    const stars = score >= 10 ? 3 : score >= 6 ? 2 : 1;
     showOverlay(`
       <h2>🎉 全部完成！</h2>
       <p>得分 <b>${score}</b> 分</p>
