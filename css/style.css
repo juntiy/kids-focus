@@ -234,6 +234,47 @@ textarea {
   to { opacity: 0; transform: translate(-50%, -230%); }
 }
 
+/* 防触电（电流急急棒） */
+.sh-menu { max-width: 720px; margin: 0 auto; }
+.sh-story {
+  font-size: 15px; line-height: 1.8; color: #455a64;
+  background: rgba(255, 255, 255, .78); border-radius: 16px;
+  padding: 14px 16px; box-shadow: var(--shadow);
+}
+.sh-levels {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px; margin: 16px 0;
+}
+.sh-level {
+  background: #fff; border: none; border-radius: 16px;
+  padding: 14px 10px; box-shadow: var(--shadow); text-align: center;
+  transition: transform .12s;
+}
+.sh-level:active { transform: scale(.95); }
+.sh-level .lv-no { font-size: 13px; color: var(--muted); }
+.sh-level .lv-name { font-size: 17px; font-weight: 800; margin: 4px 0; }
+.sh-level .lv-stars { font-size: 15px; letter-spacing: 2px; color: #ffb300; }
+.sh-skins { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }
+.sh-skin {
+  width: 110px; background: #fff; border: none; border-radius: 16px;
+  padding: 12px 8px; box-shadow: var(--shadow); text-align: center;
+}
+.sh-skin.active { outline: 4px solid var(--blue); }
+.sh-skin.locked { opacity: .55; }
+.sh-skin .skin-emoji { font-size: 34px; }
+.sh-skin .skin-name { font-weight: 700; font-size: 14px; margin: 4px 0 2px; }
+.sh-skin .skin-need { font-size: 12px; color: var(--muted); }
+.sh-progress {
+  max-width: 600px; margin: 8px auto 0; height: 12px;
+  background: rgba(255, 255, 255, .85); border-radius: 8px;
+  overflow: hidden; box-shadow: var(--shadow);
+}
+.sh-progress-inner {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, #aed581, #66bb6a);
+  border-radius: 8px; transition: width .15s linear;
+}
+
 .toast {
   position: fixed; left: 50%; bottom: 28px; z-index: 100;
   transform: translateX(-50%);
