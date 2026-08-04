@@ -1,0 +1,637 @@
+import { isTap, onPointerDrag } from '../touch.js';
+import { AI_INFO, PROMPT_PRESETS, buildImageUrl, loadImage } from '../ai.js';
+import { addImage, listImages, deleteImage } from '../storage.js';
+import { ding, buzz, win } from '../sound.js';
+
+export const id = 'spot-diff';
+export const name = '找不同';
+export const icon = '🔍';
+export const desc = '点击或画圈，找出两张图片的不同之处';
+
+const DIFF_COUNT = 5;
+const EMOJIS = ['⭐', '🎈', '🌸', '🍄', '🐞', '🌻', '🦋', '🎀', '🍀', '🐟'];
+const PATCH_FILTERS = [
+  'hue-rotate(110deg) saturate(1.25)',
+  'brightness(1.5) contrast(1.15)',
+  'invert(1)',
+  'blur(2.5px) brightness(1.1)',
+  'hue-rotate(65deg) brightness(0.9)',
+];
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+export function create(container, onExit) {
+  let cleanups = [];
+  const cleanupAll = () => { cleanups.forEach(f => { try { f(); } catch { /* noop */ } }); cleanups = []; };
+  const setScreen = (html) => { cleanupAll(); container.innerHTML = html; return container; };
+  const onCleanup = (fn) => cleanups.push(fn);
+  const q = (rootEl, sel) => rootEl.querySelector(sel);
+
+  // ---------- 工具 ----------
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(new Error('无法读取文件'));
+      r.readAsDataURL(file);
+    });
+  }
+
+  // ---------- 主菜单 ----------
+  function renderMenu() {
+    const root = setScreen(`
+      <div class="game-page">
+        <div class="game-topbar">
+          <button class="btn btn-secondary" data-action="exit">← 返回</button>
+          <h2>🔍 找不同</h2>
+          <span></span>
+        </div>
+        <div class="sd-menu">
+          <p class="sd-intro">选一张图片开始找不同：可以用自己的照片，也可以用免费 AI 生成专属图片。<br>
+            玩法：找出两幅图里的 <b>5 处不同</b>——直接<b>点击</b>，或者按住<b>拖动画圈</b>把不同处圈出来！</p>
+          <div class="sd-actions">
+            <button class="btn btn-primary" id="sd-upload">📷 上传图片</button>
+            <button class="btn btn-primary" id="sd-gallery">🖼️ 我的图库</button>
+            <button class="btn btn-primary" id="sd-ai">✨ AI 生成</button>
+          </div>
+          <input type="file" id="sd-file" accept="image/*" multiple hidden>
+        </div>
+      </div>`);
+    q(root, '[data-action="exit"]').addEventListener('click', onExit);
+
+    const fileInput = q(root, '#sd-file');
+    q(root, '#sd-upload').addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async (e) => {
+      const files = [...e.target.files];
+      if (!files.length) return;
+      try {
+        const first = await readFileAsDataUrl(files[0]);
+        const img = await loadImage(first, { crossOrigin: false });
+        startGame(img);
+        for (const f of files.slice(1)) {
+          try {
+            const d = await readFileAsDataUrl(f);
+            await addImage(d, f.name);
+          } catch { /* noop */ }
+        }
+        if (files.length > 1) toast('其余图片已存入“我的图库”');
+      } catch (err) {
+        toast('图片读取失败：' + err.message);
+      }
+      fileInput.value = '';
+    });
+
+    q(root, '#sd-gallery').addEventListener('click', openGallery);
+    q(root, '#sd-ai').addEventListener('click', openAiModal);
+  }
+
+  // ---------- 我的图库 ----------
+  async function openGallery() {
+    const root = setScreen(`
+      <div class="modal">
+        <div class="modal-card">
+          <h2>🖼️ 我的图库</h2>
+          <p class="muted">上传的图片只保存在<b>本机浏览器</b>里（不上传服务器），随时可以拿来玩找不同。</p>
+          <div class="gal-grid" id="gal-grid"><p class="empty">加载中…</p></div>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" id="gal-close">关闭</button>
+            <button class="btn btn-primary" id="gal-add">➕ 添加图片</button>
+          </div>
+          <input type="file" id="gal-file" accept="image/*" multiple hidden>
+        </div>
+      </div>`);
+    const grid = q(root, '#gal-grid');
+    const fileInput = q(root, '#gal-file');
+
+    q(root, '#gal-close').addEventListener('click', renderMenu);
+    q(root, '#gal-add').addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async (e) => {
+      const files = [...e.target.files];
+      for (const f of files) {
+        try {
+          const d = await readFileAsDataUrl(f);
+          await addImage(d, f.name);
+        } catch { /* noop */ }
+      }
+      fileInput.value = '';
+      renderList();
+    });
+
+    async function renderList() {
+      let items = [];
+      try { items = await listImages(); } catch { /* noop */ }
+      grid.innerHTML = items.length
+        ? items.map(it => `
+          <div class="gal-item">
+            <img src="${it.dataUrl}" alt="${escapeHtml(it.name)}">
+            <div class="gal-name">${escapeHtml(it.name)}</div>
+            <div class="gal-btns">
+              <button class="btn btn-small btn-primary gal-play" data-id="${it.id}">▶ 开始</button>
+              <button class="btn btn-small btn-warn gal-del" data-id="${it.id}">🗑️</button>
+            </div>
+          </div>`).join('')
+        : '<p class="empty">图库还是空的，先添加几张图片吧～</p>';
+
+      grid.querySelectorAll('.gal-play').forEach(b => b.addEventListener('click', async () => {
+        const it = items.find(x => x.id === b.dataset.id);
+        if (!it) return;
+        try {
+          const img = await loadImage(it.dataUrl, { crossOrigin: false });
+          startGame(img);
+        } catch { toast('图片加载失败'); }
+      }));
+      grid.querySelectorAll('.gal-del').forEach(b => b.addEventListener('click', async () => {
+        try { await deleteImage(b.dataset.id); toast('已删除'); renderList(); } catch { toast('删除失败'); }
+      }));
+    }
+    renderList();
+  }
+
+  // ---------- AI 生成 ----------
+  function openAiModal() {
+    const root = setScreen(`
+      <div class="modal">
+        <div class="modal-card">
+          <h2>✨ AI 生成找不同图片</h2>
+          <p class="muted">使用免费开源模型 <b>${escapeHtml(AI_INFO.model)}</b>（${escapeHtml(AI_INFO.name)}），无需登录或付费。生成需要联网，通常 10~60 秒。</p>
+          <div class="chips" id="ai-chips">
+            ${PROMPT_PRESETS.map((p, i) => `<button class="chip${i === 0 ? ' active' : ''}" data-i="${i}">${p.label}</button>`).join('')}
+          </div>
+          <textarea id="ai-prompt" rows="2" maxlength="200" placeholder="也可以自己输入画面描述，比如：一只戴帽子的小狗在海边…"></textarea>
+          <div id="ai-status" class="ai-status"></div>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" id="ai-cancel">取消</button>
+            <button class="btn" id="ai-random">🎲 随机画面</button>
+            <button class="btn btn-primary" id="ai-gen">✨ 开始生成</button>
+          </div>
+        </div>
+      </div>`);
+    let selected = 0;
+    const chips = [...root.querySelectorAll('.chip')];
+    const promptEl = q(root, '#ai-prompt');
+    const statusEl = q(root, '#ai-status');
+    const genBtn = q(root, '#ai-gen');
+
+    chips.forEach(ch => ch.addEventListener('click', () => {
+      chips.forEach(c => c.classList.remove('active'));
+      ch.classList.add('active');
+      selected = Number(ch.dataset.i);
+      promptEl.value = '';
+    }));
+    q(root, '#ai-cancel').addEventListener('click', renderMenu);
+    q(root, '#ai-random').addEventListener('click', () => {
+      const i = Math.floor(Math.random() * PROMPT_PRESETS.length);
+      chips.forEach(c => c.classList.remove('active'));
+      chips[i].classList.add('active');
+      selected = i;
+      promptEl.value = '';
+    });
+
+    genBtn.addEventListener('click', async () => {
+      const custom = promptEl.value.trim();
+      const preset = PROMPT_PRESETS[selected];
+      const prompt = (custom || preset.text) + '，儿童绘本插画风格，色彩鲜艳明亮，画面干净，没有文字';
+      genBtn.disabled = true;
+      statusEl.innerHTML = '<span class="spinner"></span><p>正在生成图片，请稍候…（免费模型生成较慢）</p>';
+      const url = buildImageUrl(prompt, { width: 768, height: 768 });
+      try {
+        let img;
+        try {
+          img = await loadImage(url);
+        } catch (e) {
+          // 跨域读取失败时，退回不跨域加载（自动改用滤镜差异方案）
+          img = await loadImage(url, { crossOrigin: false });
+        }
+        startGame(img);
+      } catch (err) {
+        statusEl.innerHTML = `<p class="err">${escapeHtml(err.message)}。请检查网络，或改用“上传图片”/“我的图库”。</p>`;
+        genBtn.disabled = false;
+      }
+    });
+  }
+
+  // ---------- 生成差异 ----------
+  function prepareGame(img) {
+    const iw0 = img.naturalWidth;
+    const ih0 = img.naturalHeight;
+    const MAX = 720;
+    const sc = Math.min(1, MAX / Math.max(iw0, ih0));
+    const iw = Math.max(1, Math.round(iw0 * sc));
+    const ih = Math.max(1, Math.round(ih0 * sc));
+
+    const base = document.createElement('canvas');
+    base.width = iw;
+    base.height = ih;
+    const bctx = base.getContext('2d');
+    bctx.drawImage(img, 0, 0, iw, ih);
+
+    const diffCanvas = document.createElement('canvas');
+    diffCanvas.width = iw;
+    diffCanvas.height = ih;
+    const dctx = diffCanvas.getContext('2d');
+    dctx.drawImage(base, 0, 0);
+
+    const margin = Math.min(iw, ih) * 0.08;
+    const baseR = Math.min(iw, ih) * 0.065;
+    const diffs = [];
+    let attempts = 0;
+    while (diffs.length < DIFF_COUNT && attempts < DIFF_COUNT * 40) {
+      attempts++;
+      const r = baseR * (0.9 + Math.random() * 0.35);
+      const x = margin + Math.random() * (iw - margin * 2);
+      const y = margin + Math.random() * (ih - margin * 2);
+      if (diffs.some(d => Math.hypot(d.x - x, d.y - y) < d.r + r + baseR)) continue;
+      diffs.push({ x, y, r });
+    }
+
+    let dataUrl = null;
+    let patches = null;
+    try {
+      applyPixelDiffs(bctx, dctx, base, diffs);
+      dataUrl = diffCanvas.toDataURL('image/jpeg', 0.92);
+    } catch {
+      // 跨域图片无法读取像素时，用“滤镜补丁”方案
+      patches = diffs.map((d, i) => ({
+        x: d.x, y: d.y, r: d.r,
+        filter: PATCH_FILTERS[i % PATCH_FILTERS.length],
+      }));
+    }
+    return { iw, ih, diffs, dataUrl, patches };
+  }
+
+  function applyPixelDiffs(bctx, dctx, base, diffs) {
+    const w = base.width;
+    const h = base.height;
+    const basePixels = bctx.getImageData(0, 0, w, h).data;
+
+    diffs.forEach((d, i) => {
+      const type = i % 5;
+      const x0 = Math.max(0, Math.floor(d.x - d.r));
+      const x1 = Math.min(w - 1, Math.ceil(d.x + d.r));
+      const y0 = Math.max(0, Math.floor(d.y - d.r));
+      const y1 = Math.min(h - 1, Math.ceil(d.y + d.r));
+      if (x1 < x0 || y1 < y0) return;
+      const rw = x1 - x0 + 1;
+      const rh = y1 - y0 + 1;
+      const img = dctx.getImageData(x0, y0, rw, rh);
+      const data = img.data;
+      const cx = d.x - x0;
+      const cy = d.y - y0;
+      const inCircle = (i2, j2) => {
+        const dx = i2 - cx;
+        const dy = j2 - cy;
+        return dx * dx + dy * dy <= d.r * d.r;
+      };
+
+      if (type === 0) {
+        // 色相偏移
+        for (let j = 0; j < rh; j++) {
+          for (let i2 = 0; i2 < rw; i2++) {
+            if (!inCircle(i2, j)) continue;
+            const k = (j * rw + i2) * 4;
+            const [hh, ss, ll] = rgbToHsl(data[k], data[k + 1], data[k + 2]);
+            const [rr, gg, bb] = hslToRgb((hh + 100 + Math.random() * 40) % 360, Math.min(1, ss + 0.12), ll);
+            data[k] = rr; data[k + 1] = gg; data[k + 2] = bb;
+          }
+        }
+      } else if (type === 1) {
+        // 变亮
+        for (let j = 0; j < rh; j++) {
+          for (let i2 = 0; i2 < rw; i2++) {
+            if (!inCircle(i2, j)) continue;
+            const k = (j * rw + i2) * 4;
+            data[k] = Math.min(255, data[k] * 1.5);
+            data[k + 1] = Math.min(255, data[k + 1] * 1.5);
+            data[k + 2] = Math.min(255, data[k + 2] * 1.5);
+          }
+        }
+      } else if (type === 2) {
+        // 反色
+        for (let j = 0; j < rh; j++) {
+          for (let i2 = 0; i2 < rw; i2++) {
+            if (!inCircle(i2, j)) continue;
+            const k = (j * rw + i2) * 4;
+            data[k] = 255 - data[k];
+            data[k + 1] = 255 - data[k + 1];
+            data[k + 2] = 255 - data[k + 2];
+          }
+        }
+      } else if (type === 3) {
+        // 模糊
+        const src = new Uint8ClampedArray(data);
+        for (let j = 0; j < rh; j++) {
+          for (let i2 = 0; i2 < rw; i2++) {
+            if (!inCircle(i2, j)) continue;
+            let r = 0, g = 0, b = 0, a = 0, n = 0;
+            for (let dj = -2; dj <= 2; dj++) {
+              for (let di = -2; di <= 2; di++) {
+                const ii = i2 + di;
+                const jj = j + dj;
+                if (ii < 0 || jj < 0 || ii >= rw || jj >= rh) continue;
+                const k = (jj * rw + ii) * 4;
+                r += src[k]; g += src[k + 1]; b += src[k + 2]; a += src[k + 3]; n++;
+              }
+            }
+            const k = (j * rw + i2) * 4;
+            data[k] = r / n; data[k + 1] = g / n; data[k + 2] = b / n; data[k + 3] = a / n;
+          }
+        }
+      } else {
+        // 涂抹掉（采样边缘颜色填充成补丁）
+        const N = 16;
+        let r = 0, g = 0, b = 0;
+        for (let a = 0; a < N; a++) {
+          const ang = Math.PI * 2 * a / N;
+          const sx = Math.max(0, Math.min(w - 1, Math.round(d.x + Math.cos(ang) * d.r * 1.3)));
+          const sy = Math.max(0, Math.min(h - 1, Math.round(d.y + Math.sin(ang) * d.r * 1.3)));
+          const k = (sy * w + sx) * 4;
+          r += basePixels[k]; g += basePixels[k + 1]; b += basePixels[k + 2];
+        }
+        r = Math.round(r / N); g = Math.round(g / N); b = Math.round(b / N);
+        const grad = dctx.createRadialGradient(d.x, d.y, d.r * 0.5, d.x, d.y, d.r);
+        grad.addColorStop(0, `rgba(${r},${g},${b},1)`);
+        grad.addColorStop(0.75, `rgba(${r},${g},${b},0.92)`);
+        grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+        dctx.save();
+        dctx.fillStyle = grad;
+        dctx.beginPath();
+        dctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+        dctx.fill();
+        dctx.restore();
+        return;
+      }
+      dctx.putImageData(img, x0, y0);
+    });
+
+    // 在部分差异处“添加”一个可爱小物件（更接近真实找不同）
+    diffs.forEach((d, i) => {
+      if (i % 2 === 1) {
+        const emoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+        dctx.font = `${Math.round(d.r * 1.8)}px "Segoe UI Emoji", "Apple Color Emoji", serif`;
+        dctx.textAlign = 'center';
+        dctx.textBaseline = 'middle';
+        dctx.fillText(emoji, d.x, d.y + d.r * 0.05);
+      }
+    });
+  }
+
+  // ---------- 开始游戏 ----------
+  function startGame(img) {
+    const prepared = prepareGame(img);
+    const root = setScreen(`
+      <div class="game-page">
+        <div class="game-topbar">
+          <button class="btn btn-secondary" id="sd-back">← 返回</button>
+          <h2>🔍 找出 <b id="sd-found">0</b> / ${DIFF_COUNT} 处不同</h2>
+          <button class="btn" id="sd-hint">💡 提示</button>
+        </div>
+        <div class="sd-images">
+          <figure class="sd-fig">
+            <figcaption>图 A · 原图</figcaption>
+            <div class="sd-imgwrap" id="sd-wrap-a"><img id="sd-img-a" alt="原图"><canvas id="sd-overlay-a"></canvas></div>
+          </figure>
+          <figure class="sd-fig">
+            <figcaption>图 B · 找不同</figcaption>
+            <div class="sd-imgwrap" id="sd-wrap-b"><img id="sd-img-b" alt="找不同"><canvas id="sd-overlay-b"></canvas></div>
+          </figure>
+        </div>
+        <div class="sd-timer">⏱️ <span id="sd-time">0</span> 秒</div>
+      </div>`);
+
+    const game = {
+      iw: prepared.iw,
+      ih: prepared.ih,
+      diffs: prepared.diffs,
+      found: new Set(),
+      hints: 0,
+      seconds: 0,
+      wrapA: q(root, '#sd-wrap-a'),
+      wrapB: q(root, '#sd-wrap-b'),
+      imgA: q(root, '#sd-img-a'),
+      imgB: q(root, '#sd-img-b'),
+    };
+    let hintTimer = null;
+    let hintIndex = -1;
+    let hintOn = false;
+
+    game.imgA.src = img.src;
+    game.imgB.src = prepared.dataUrl || img.src;
+    game.wrapA.style.aspectRatio = `${game.iw} / ${game.ih}`;
+    game.wrapB.style.aspectRatio = `${game.iw} / ${game.ih}`;
+    if (prepared.patches) applyPatches(game, prepared.patches);
+
+    const timeEl = q(root, '#sd-time');
+    const foundEl = q(root, '#sd-found');
+    const timer = setInterval(() => { game.seconds++; timeEl.textContent = game.seconds; }, 1000);
+    onCleanup(() => clearInterval(timer));
+
+    q(root, '#sd-back').addEventListener('click', renderMenu);
+    q(root, '#sd-hint').addEventListener('click', useHint);
+
+    [game.wrapA, game.wrapB].forEach(wrap => {
+      const off = onPointerDrag(wrap, {
+        down: () => {},
+        move: (p, start) => drawGesture(p, start, true),
+        up: (p, start) => {
+          drawGesture(p, start, false);
+          handleTapOrCircle(start, p);
+        },
+      });
+      onCleanup(off);
+    });
+
+    function drawGesture(p, start, on) {
+      const cv = game.wrapB.querySelector('canvas');
+      redrawOverlays();
+      if (!on || !p) return;
+      const c = cv.getContext('2d');
+      c.strokeStyle = '#ff7043';
+      c.lineWidth = 3;
+      c.setLineDash([8, 6]);
+      if (isTap(start, p, 8)) {
+        c.beginPath(); c.arc(p.x, p.y, 10, 0, Math.PI * 2); c.stroke();
+      } else {
+        const cx = (start.x + p.x) / 2;
+        const cy = (start.y + p.y) / 2;
+        const r = Math.hypot(p.x - start.x, p.y - start.y) / 2;
+        c.beginPath(); c.arc(cx, cy, r, 0, Math.PI * 2); c.stroke();
+      }
+      c.setLineDash([]);
+    }
+
+    function handleTapOrCircle(start, p) {
+      const rect = game.wrapB.getBoundingClientRect();
+      if (!rect.width) return;
+      const toNat = (px, py) => ({ x: px / rect.width * game.iw, y: py / rect.height * game.ih });
+      const hits = [];
+      if (isTap(start, p, 8)) {
+        const n = toNat(p.x, p.y);
+        game.diffs.forEach((d, i) => {
+          if (!game.found.has(i) && Math.hypot(n.x - d.x, n.y - d.y) < d.r * 1.35) hits.push(i);
+        });
+      } else {
+        const cn = toNat((start.x + p.x) / 2, (start.y + p.y) / 2);
+        const cr = Math.hypot(p.x - start.x, p.y - start.y) / 2 * (game.iw / rect.width);
+        game.diffs.forEach((d, i) => {
+          if (!game.found.has(i) && Math.hypot(cn.x - d.x, cn.y - d.y) < cr + d.r * 0.9) hits.push(i);
+        });
+      }
+      if (hits.length) {
+        hits.forEach(i => game.found.add(i));
+        ding();
+        foundEl.textContent = game.found.size;
+        redrawOverlays();
+        if (game.found.size >= DIFF_COUNT) showWin();
+      } else {
+        buzz();
+      }
+    }
+
+    function useHint() {
+      if (game.found.size >= DIFF_COUNT || hintTimer) return;
+      game.hints++;
+      hintIndex = game.diffs.findIndex((d, i) => !game.found.has(i));
+      if (hintIndex < 0) return;
+      hintOn = true;
+      redrawOverlays();
+      hintTimer = setInterval(() => { hintOn = !hintOn; redrawOverlays(); }, 320);
+      setTimeout(() => {
+        clearInterval(hintTimer);
+        hintTimer = null;
+        hintOn = false;
+        redrawOverlays();
+      }, 3200);
+      onCleanup(() => clearInterval(hintTimer));
+    }
+
+    function redrawOverlays() {
+      [game.wrapA, game.wrapB].forEach(wrap => {
+        const cv = wrap.querySelector('canvas');
+        const rect = wrap.getBoundingClientRect();
+        if (!rect.width) return;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        cv.width = Math.round(rect.width * dpr);
+        cv.height = Math.round(rect.height * dpr);
+        const c = cv.getContext('2d');
+        c.scale(dpr, dpr);
+        c.clearRect(0, 0, rect.width, rect.height);
+        const sx = rect.width / game.iw;
+        const sy = rect.height / game.ih;
+        game.diffs.forEach((d, i) => {
+          if (!game.found.has(i)) return;
+          const px = d.x * sx;
+          const py = d.y * sy;
+          const pr = Math.max(14, d.r * sx);
+          c.fillStyle = 'rgba(76, 175, 80, .28)';
+          c.strokeStyle = '#2e7d32';
+          c.lineWidth = 4;
+          c.beginPath(); c.arc(px, py, pr, 0, Math.PI * 2); c.fill(); c.stroke();
+          c.fillStyle = '#2e7d32';
+          c.font = `bold ${Math.round(pr * 0.95)}px sans-serif`;
+          c.textAlign = 'center';
+          c.textBaseline = 'middle';
+          c.fillText('✓', px, py + 1);
+        });
+      });
+      // 提示圈（只画在图 B 上）
+      if (hintOn && hintIndex >= 0 && !game.found.has(hintIndex)) {
+        const d = game.diffs[hintIndex];
+        const cv = game.wrapB.querySelector('canvas');
+        const rect = game.wrapB.getBoundingClientRect();
+        const c = cv.getContext('2d');
+        c.strokeStyle = '#ffb300';
+        c.lineWidth = 5;
+        c.setLineDash([12, 8]);
+        c.beginPath(); c.arc(d.x * rect.width / game.iw, d.y * rect.height / game.ih, Math.max(20, d.r * rect.width / game.iw), 0, Math.PI * 2); c.stroke();
+        c.setLineDash([]);
+      }
+    }
+
+    function applyPatches(g, patches) {
+      patches.forEach(p => {
+        const div = document.createElement('div');
+        div.className = 'sd-patch';
+        div.style.backgroundImage = `url("${g.imgB.src}")`;
+        div.style.backgroundSize = '100% 100%';
+        div.style.clipPath = `circle(${p.r}px at ${p.x}px ${p.y}px)`;
+        div.style.filter = p.filter;
+        g.wrapB.appendChild(div);
+      });
+    }
+
+    function showWin() {
+      win();
+      const stars = Math.max(1, 3 - game.hints);
+      const overlay = document.createElement('div');
+      overlay.className = 'win-overlay';
+      overlay.innerHTML = `
+        <div class="win-card">
+          <h2>🎉 太棒了！全部找到！</h2>
+          <p>用时 <b>${game.seconds}</b> 秒 · 提示 <b>${game.hints}</b> 次</p>
+          <p class="stars">${'⭐'.repeat(stars)}${'☆'.repeat(3 - stars)}</p>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" id="sd-new">🖼️ 换一张</button>
+            <button class="btn btn-primary" id="sd-again">🔄 再玩一次</button>
+          </div>
+        </div>`;
+      container.appendChild(overlay);
+      onCleanup(() => overlay.remove());
+      q(overlay, '#sd-new').addEventListener('click', () => { overlay.remove(); renderMenu(); });
+      q(overlay, '#sd-again').addEventListener('click', () => { overlay.remove(); startGame(img); });
+    }
+  }
+
+  renderMenu();
+  return cleanupAll;
+}
+
+// ---------- 颜色工具 ----------
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0));
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+  }
+  return [h, s, l];
+}
+
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360;
+  if (s === 0) {
+    const v = Math.round(l * 255);
+    return [v, v, v];
+  }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const f = (t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  return [Math.round(f(h / 360 + 1 / 3) * 255), Math.round(f(h / 360) * 255), Math.round(f(h / 360 - 1 / 3) * 255)];
+}
+
+// ---------- 全局提示 ----------
+let toastTimer = null;
+function toast(msg) {
+  document.querySelectorAll('.toast').forEach(t => t.remove());
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.remove(), 2800);
+}

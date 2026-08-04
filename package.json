@@ -1,0 +1,7 @@
+{
+  "name": "kids-focus",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "儿童专注力训练小游戏合集（纯静态网页，免费部署）"
+}
