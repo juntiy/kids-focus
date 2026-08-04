@@ -1,45 +1,47 @@
 import { getPos } from '../touch.js';
-import { ding, buzz, lose } from '../sound.js';
+import { ding, buzz, lose, win } from '../sound.js';
 
 export const id = 'shock';
 export const name = '防触电';
 export const icon = '⚡';
-export const desc = '点击安全物品得分，千万别碰带电的东西';
+export const desc = '安全的物品才点，带电的千万别碰（慢速专注版）';
 
 const W = 820;
 const H = 500;
-const SAFE = ['🍎', '🍌', '🍓', '🧸', '🎈', '⭐', '🐰', '🚗', '🍇'];
+const SAFE = ['🍎', '🍌', '🍓', '🧸', '🎈', '⭐', '🐰', '🚗', '🍇', '🌸'];
 const DANGER = ['⚡', '🔌'];
+const TOTAL_ROUNDS = 20;
+const SHOW_TIME = 3.2;   // 每个物品停留时间（秒）
+const RESOLVE_GAP = 1.0; // 点完或超时后的间隔（秒）
 const bestKey = 'kids-best-shock';
 
 export function create(container, onExit) {
   let cleanups = [];
   const cleanupAll = () => { cleanups.forEach(f => { try { f(); } catch { /* noop */ } }); cleanups = []; };
   const setScreen = (html) => { cleanupAll(); container.innerHTML = html; return container; };
-  const q = (rootEl, sel) => rootEl.querySelector(sel);
   const onCleanup = (fn) => cleanups.push(fn);
+  const q = (rootEl, sel) => rootEl.querySelector(sel);
 
   let canvas = null;
   let ctx = null;
   let wrap = null;
   let raf = 0;
   let lastT = 0;
-  let state = 'ready';
-  let items = [];
-  let lives = 3;
+  let round = 0;
   let score = 0;
-  let elapsed = 0;
-  let spawnT = 1.1;
-  let lastTap = 0;
+  let lives = 3;
+  let item = null;         // 当前物品 { emoji, safe }
+  let phase = 'wait';      // wait -> show -> resolved
+  let phaseTimer = 1.0;
   let best = Number(localStorage.getItem(bestKey) || 0);
 
   function reset() {
-    items = [];
-    lives = 3;
+    round = 0;
     score = 0;
-    elapsed = 0;
-    spawnT = 1.6;
-    state = 'play';
+    lives = 3;
+    item = null;
+    phase = 'wait';
+    phaseTimer = 1.0;
   }
 
   function renderScreen() {
@@ -50,9 +52,9 @@ export function create(container, onExit) {
           <h2>⚡ 防触电</h2>
           <span id="sh-lives">❤️❤️❤️</span>
         </div>
-        <p class="center muted">点击<b>安全物品</b>得分，<b>千万别碰</b>带电的 ⚡ 和 🔌！前 30 秒保持慢速，慢慢熟悉～</p>
+        <p class="center muted">物品会<b>一个一个慢慢出现</b>：<b>安全的才点</b>，带电的 ⚡ 千万不能碰。不用着急，慢慢看～</p>
         <div class="canvas-wrap" id="sh-wrap"><canvas id="sh-canvas"></canvas></div>
-        <p class="center muted" style="margin-top:8px">得分：<b id="sh-score">0</b></p>
+        <p class="center muted" style="margin-top:8px">第 <b id="sh-round">0</b> / ${TOTAL_ROUNDS} 个 · 收集 <b id="sh-score">0</b></p>
       </div>`);
     canvas = q(root, '#sh-canvas');
     wrap = q(root, '#sh-wrap');
@@ -74,27 +76,48 @@ export function create(container, onExit) {
     onCleanup(() => cancelAnimationFrame(raf));
   }
 
-  function onTap(e) {
-    const now = Date.now();
-    if (now - lastTap < 250) return;
-    lastTap = now;
-    if (state === 'over') return;
-    const p = getPos(e, canvas);
-    const rect = canvas.getBoundingClientRect();
-    if (!rect.width) return;
-    const px = p.x / rect.width * W;
-    const py = p.y / rect.height * H;
-    let hit = null;
-    for (let i = items.length - 1; i >= 0; i--) {
-      const it = items[i];
-      if (Math.hypot(it.x - px, it.y - py) < it.r * 1.4) { hit = it; break; }
+  function nextItem() {
+    round++;
+    if (round > TOTAL_ROUNDS) { finish(); return; }
+    const safe = Math.random() < 0.6;
+    const pool = safe ? SAFE : DANGER;
+    let emoji = pool[Math.floor(Math.random() * pool.length)];
+    if (item && emoji === item.emoji) emoji = pool[(pool.indexOf(emoji) + 1) % pool.length];
+    item = { emoji, safe };
+    phase = 'show';
+    phaseTimer = SHOW_TIME;
+    updateHud();
+  }
+
+  function frame(t) {
+    const dt = Math.min(0.033, (t - lastT) / 1000 || 0.016);
+    lastT = t;
+    phaseTimer -= dt;
+    if (phase === 'wait' && phaseTimer <= 0) {
+      nextItem();
+    } else if (phase === 'show' && phaseTimer <= 0) {
+      // 超时未点：安全物品没收集到（不扣分，保持轻松）；带电的没点反而是对的
+      item = null;
+      phase = 'resolved';
+      phaseTimer = RESOLVE_GAP;
+    } else if (phase === 'resolved' && phaseTimer <= 0) {
+      item = null;
+      phase = 'wait';
+      phaseTimer = 0.9;
     }
-    if (!hit) return;
-    items = items.filter(it => it !== hit);
-    if (hit.safe) {
+    draw();
+    raf = requestAnimationFrame(frame);
+  }
+
+  function onTap(e) {
+    if (phase !== 'show' || !item) return;
+    if (item.safe) {
       score++;
       ding();
-      floatPlus(px, py);
+      floatPlus('+1', 0.5, 0.4);
+      item = null;
+      phase = 'resolved';
+      phaseTimer = RESOLVE_GAP;
       updateHud();
     } else {
       lives--;
@@ -102,39 +125,12 @@ export function create(container, onExit) {
       flashRed();
       canvas.classList.add('shake');
       setTimeout(() => canvas.classList.remove('shake'), 420);
+      item = null;
+      phase = 'resolved';
+      phaseTimer = RESOLVE_GAP + 0.3;
       updateHud();
       if (lives <= 0) { lose(); gameOver(); }
     }
-  }
-
-  function frame(t) {
-    const dt = Math.min(0.033, (t - lastT) / 1000 || 0.016);
-    lastT = t;
-    if (state === 'play') {
-      elapsed += dt;
-      spawnT -= dt;
-      if (spawnT <= 0) {
-        spawn();
-        spawnT = Math.max(0.9, 1.8 - Math.max(0, elapsed - 30) * 0.02);
-      }
-      items.forEach(it => { it.y += it.vy * dt; });
-      items = items.filter(it => it.y < H + 60);
-    }
-    draw();
-    raf = requestAnimationFrame(frame);
-  }
-
-  function spawn() {
-    const safe = Math.random() < 0.6;
-    const pool = safe ? SAFE : DANGER;
-    items.push({
-      x: 50 + Math.random() * (W - 100),
-      y: -40,
-      vy: Math.min(120, 40 + Math.max(0, elapsed - 30) * 2.5) + Math.random() * 10,
-      emoji: pool[Math.floor(Math.random() * pool.length)],
-      safe,
-      r: 34,
-    });
   }
 
   function draw() {
@@ -144,31 +140,59 @@ export function create(container, onExit) {
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
 
-    ctx.font = '52px "Segoe UI Emoji", "Apple Color Emoji", serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    for (const it of items) {
-      ctx.save();
-      ctx.translate(it.x, it.y);
-      ctx.rotate(Math.sin(it.y * 0.02) * 0.1);
-      ctx.fillText(it.emoji, 0, 0);
-      ctx.restore();
-    }
+    const cx = W / 2;
+    const cy = H / 2 - 10;
+    ctx.fillStyle = 'rgba(255,255,255,.92)';
+    roundRect(ctx, cx - 150, cy - 120, 300, 240, 28);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(100,120,150,.25)';
+    ctx.lineWidth = 4;
+    roundRect(ctx, cx - 150, cy - 120, 300, 240, 28);
+    ctx.stroke();
 
-    if (score === 0) {
-      ctx.fillStyle = '#37474f';
-      ctx.font = 'bold 26px sans-serif';
+    if (item) {
+      ctx.font = '105px "Segoe UI Emoji", "Apple Color Emoji", serif';
       ctx.textAlign = 'center';
-      ctx.fillText('👆 点击安全物品，别碰 ⚡！', W / 2, H / 2 - 60);
+      ctx.textBaseline = 'middle';
+      ctx.fillText(item.emoji, cx, cy - 8);
+
+      ctx.fillStyle = '#90a4ae';
+      ctx.font = '22px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('看仔细再点', cx, cy + 92);
+
+      const pct = Math.max(0, phaseTimer / SHOW_TIME);
+      ctx.fillStyle = '#e0e0e0';
+      roundRect(ctx, cx - 110, cy + 112, 220, 10, 5);
+      ctx.fill();
+      ctx.fillStyle = '#aed581';
+      roundRect(ctx, cx - 110, cy + 112, 220 * pct, 10, 5);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = '#90a4ae';
+      ctx.font = '26px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('准备下一个…', cx, cy);
     }
   }
 
-  function floatPlus(px, py) {
+  function roundRect(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+
+  function floatPlus(text, fx, fy) {
     const el = document.createElement('span');
     el.className = 'float-plus';
-    el.textContent = '+1';
-    el.style.left = `${(px / W * 100).toFixed(1)}%`;
-    el.style.top = `${(py / H * 100).toFixed(1)}%`;
+    el.textContent = text;
+    el.style.left = `${(fx * 100).toFixed(1)}%`;
+    el.style.top = `${(fy * 100).toFixed(1)}%`;
     wrap.appendChild(el);
     setTimeout(() => el.remove(), 800);
   }
@@ -181,26 +205,43 @@ export function create(container, onExit) {
   }
 
   function updateHud() {
-    const livesEl = q(container, '#sh-lives');
+    const roundEl = q(container, '#sh-round');
     const scoreEl = q(container, '#sh-score');
-    if (livesEl) livesEl.textContent = '❤️'.repeat(Math.max(0, lives)) + '🖤'.repeat(Math.max(0, 3 - lives));
+    const livesEl = q(container, '#sh-lives');
+    if (roundEl) roundEl.textContent = Math.min(round, TOTAL_ROUNDS);
     if (scoreEl) scoreEl.textContent = score;
+    if (livesEl) livesEl.textContent = '❤️'.repeat(Math.max(0, lives)) + '🖤'.repeat(Math.max(0, 3 - lives));
+  }
+
+  function finish() {
+    win();
+    if (score > best) { best = score; localStorage.setItem(bestKey, String(best)); }
+    const stars = score >= 16 ? 3 : score >= 12 ? 2 : 1;
+    showOverlay(`
+      <h2>🎉 全部看完啦！</h2>
+      <p>收集了 <b>${score}</b> 个安全物品 · 最佳 <b>${best}</b></p>
+      <p class="stars">${'⭐'.repeat(stars)}${'☆'.repeat(3 - stars)}</p>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="sh-exit">🏠 返回首页</button>
+        <button class="btn btn-primary" id="sh-again">🔄 再来一局</button>
+      </div>`);
   }
 
   function gameOver() {
-    state = 'over';
-    if (score > best) { best = score; localStorage.setItem(bestKey, String(best)); }
+    showOverlay(`
+      <h2>😌 碰到了电…</h2>
+      <p>收集 <b>${score}</b> 个 · 最佳 <b>${best}</b></p>
+      <p class="muted">没关系，记得：带电的东西千万不能碰～</p>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="sh-exit">🏠 返回首页</button>
+        <button class="btn btn-primary" id="sh-again">🔄 再来一局</button>
+      </div>`);
+  }
+
+  function showOverlay(inner) {
     const overlay = document.createElement('div');
     overlay.className = 'win-overlay';
-    overlay.innerHTML = `
-      <div class="win-card">
-        <h2>⚡ 被电到啦！</h2>
-        <p>得分 <b>${score}</b> · 最佳 <b>${best}</b></p>
-        <div class="modal-actions">
-          <button class="btn btn-secondary" id="sh-exit">🏠 返回首页</button>
-          <button class="btn btn-primary" id="sh-again">🔄 再来一次</button>
-        </div>
-      </div>`;
+    overlay.innerHTML = `<div class="win-card">${inner}</div>`;
     container.appendChild(overlay);
     cleanups.push(() => overlay.remove());
     q(overlay, '#sh-exit').addEventListener('click', onExit);

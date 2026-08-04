@@ -10,7 +10,7 @@ const GAMES = [
   { id: 'color-match', name: '找相近颜色', icon: '🎨', desc: '在一堆相近颜色里，找到唯一不一样的那一个', color: '#d1c4e9', create: createColorMatch },
   { id: 'maze', name: '走迷宫', icon: '🌀', desc: '用手指拖动小球，穿过迷宫到达终点', color: '#b2dfdb', create: createMaze },
   { id: 'obstacle', name: '过障碍', icon: '🦘', desc: '点击屏幕让小青蛙跳过障碍物，越跳越远', color: '#c8e6c9', create: createObstacle },
-  { id: 'shock', name: '防触电', icon: '⚡', desc: '点击安全物品得分，千万别碰带电的东西！', color: '#ffcdd2', create: createShock },
+  { id: 'shock', name: '防触电', icon: '⚡', desc: '物品一个个慢慢出现：安全的才点，带电的千万别碰', color: '#ffcdd2', create: createShock },
   { id: 'schulte', name: '舒尔特方格', icon: '🔢', desc: '按顺序从 1 点到最后，训练注意力和反应力', color: '#b3e5fc', create: createSchulte },
 ];
 
