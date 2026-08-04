@@ -87,7 +87,7 @@ export function create(container, onExit) {
     let hit = null;
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
-      if (Math.hypot(it.x - px, it.y - py) < it.r * 1.25) { hit = it; break; }
+      if (Math.hypot(it.x - px, it.y - py) < it.r * 1.4) { hit = it; break; }
     }
     if (!hit) return;
     items = items.filter(it => it !== hit);
@@ -115,7 +115,7 @@ export function create(container, onExit) {
       spawnT -= dt;
       if (spawnT <= 0) {
         spawn();
-        spawnT = Math.max(0.6, 1.25 - level * 0.05);
+        spawnT = Math.max(0.8, 1.6 - level * 0.05);
       }
       items.forEach(it => { it.y += it.vy * dt; });
       items = items.filter(it => it.y < H + 60);
@@ -130,7 +130,7 @@ export function create(container, onExit) {
     items.push({
       x: 50 + Math.random() * (W - 100),
       y: -40,
-      vy: Math.min(230, 85 + level * 12 + Math.random() * 35),
+      vy: Math.min(140, 50 + level * 7 + Math.random() * 20),
       emoji: pool[Math.floor(Math.random() * pool.length)],
       safe,
       r: 34,
